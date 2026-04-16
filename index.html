@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fuel Log">
+<meta name="theme-color" content="#0D0D0D">
+<title>Fuel Log</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230D0D0D'/><text y='.9em' font-size='90' x='5'>🔥</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: #0D0D0D; font-family: 'DM Sans', sans-serif; color: #fff; overscroll-behavior: none; }
+  input::placeholder { color: rgba(255,255,255,0.2); }
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.3); opacity: 0; } }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes drift { 0%, 100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-8px,12px) scale(1.08); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  .type-btn { position: relative; overflow: hidden; }
+  .type-btn::before { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 20%, rgba(255,107,53,0.18) 50%, transparent 80%); background-size: 200% 100%; animation: shimmer 4.5s linear infinite; pointer-events: none; }
+  .type-btn:active { transform: scale(0.97); }
+  .grain { position: absolute; inset: 0; pointer-events: none; opacity: 0.035; mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+
+<script>
+const e = React.createElement;
+const { useState, useEffect, useRef, useCallback } = React;
+
+const STORAGE_KEY = "macro-tracker-v1";
+const HISTORY_KEY = "macro-tracker-history-v1";
+const FAV_KEY = "macro-tracker-favorites-v1";
+const GOALS_KEY = "macro-tracker-goals";
+const API_KEY_KEY = "macro-tracker-api-key";
+const DEFAULT_GOALS = { calories: 1875, protein: 165, carbs: 150, fat: 60 };
+
+function today() { return new Date().toISOString().slice(0, 10); }
+const SEED_FLAG = "macro-tracker-seed-20260413";
+const SEED_20260413 = [
+  { name: "ALLMAX ISOFlex shake", quantity: "1 scoop", calories: 120, protein: 27, carbs: 1, fat: 0.5, time: "08:00" },
+  { name: "Large americano + splash 3% milk", quantity: "large", calories: 20, protein: 1, carbs: 1.5, fat: 1, time: "08:30" },
+  { name: "Farmhouse kitchen bowl", quantity: "1 bowl", calories: 785, protein: 62, carbs: 88, fat: 14, time: "12:30" },
+  { name: "Cottage cheese bowl (250g + granola + honey)", quantity: "1 bowl", calories: 390, protein: 30, carbs: 42, fat: 8, time: "15:30" },
+  { name: "182g chicken breast + 78g edamame", quantity: "182g + 78g", calories: 390, protein: 52, carbs: 7, fat: 10, time: "19:00" },
+  { name: "100g Nordica 2% cottage cheese (plain)", quantity: "100g", calories: 80, protein: 12, carbs: 3, fat: 2, time: "21:30" },
+];
+function loadHistory() {
+  try {
+    let h = {};
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) h = JSON.parse(raw) || {};
+    else {
+      const old = localStorage.getItem(STORAGE_KEY);
+      if (old) { const d = JSON.parse(old); if (d?.date && Array.isArray(d.entries)) h = { [d.date]: d.entries }; }
+    }
+    if (!localStorage.getItem(SEED_FLAG)) {
+      if (!h["2026-04-13"] || h["2026-04-13"].length === 0) {
+        h["2026-04-13"] = SEED_20260413.map((x, i) => ({ ...x, id: 1760000000000 + i }));
+      }
+      localStorage.setItem(SEED_FLAG, "1");
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+    }
+    return h;
+  } catch { return {}; }
+}
+function saveHistory(h) { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
+function loadFavs() { try { return JSON.parse(localStorage.getItem(FAV_KEY)) || []; } catch { return []; } }
+function saveFavs(f) { localStorage.setItem(FAV_KEY, JSON.stringify(f)); }
+function loadGoals() { try { const raw = localStorage.getItem(GOALS_KEY); if (!raw) return { ...DEFAULT_GOALS }; const p = JSON.parse(raw); return { calories: p.calories ?? DEFAULT_GOALS.calories, protein: p.protein ?? DEFAULT_GOALS.protein, carbs: p.carbs ?? DEFAULT_GOALS.carbs, fat: p.fat ?? DEFAULT_GOALS.fat }; } catch { return { ...DEFAULT_GOALS }; } }
+function saveGoals(goals) { localStorage.setItem(GOALS_KEY, JSON.stringify(goals)); }
+function loadApiKey() { return localStorage.getItem(API_KEY_KEY) || ""; }
+function saveApiKey(k) { localStorage.setItem(API_KEY_KEY, k); }
+function sumMacros(entries) { return entries.reduce((a, e) => ({ calories: a.calories+(e.calories||0), protein: a.protein+(e.protein||0), carbs: a.carbs+(e.carbs||0), fat: a.fat+(e.fat||0) }), { calories:0, protein:0, carbs:0, fat:0 }); }
+
+async function analyzeFood(text, apiKey) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514", max_tokens: 1000,
+      messages: [{ role: "user", content: "You are a precise nutritional analyst. The user describes food they just ate. Break it into individual items, estimate realistic portion sizes, and return ONLY valid JSON (no markdown, no backticks, no explanation).\n\nReturn format:\n{ \"items\": [{ \"name\": \"item name\", \"quantity\": \"amount description\", \"calories\": number, \"protein\": number, \"carbs\": number, \"fat\": number }] }\n\nBe accurate. Use USDA-standard values. If someone says \"left out the yolks\" for eggs, only count egg whites. If they say \"extra banana\" count it. Be specific about what was included.\n\nUser said: \"" + text + "\"" }],
+    }),
+  });
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error?.message || "API error " + res.status); }
+  const data = await res.json();
+  const raw = data.content?.[0]?.text || "";
+  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+}
+
+async function suggestMeal(remaining, apiKey) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514", max_tokens: 1000,
+      messages: [{ role: "user", content: "You are a practical meal planning assistant. The user has these macros remaining for the day:\n\nCalories: " + remaining.calories + " kcal\nProtein: " + remaining.protein + "g\nCarbs: " + remaining.carbs + "g\nFat: " + remaining.fat + "g\n\nSuggest 1-3 simple, realistic meals or snacks that together would help hit these remaining targets. Use common, easy-to-prepare foods. Return ONLY valid JSON (no markdown, no backticks, no explanation).\n\nReturn format:\n{ \"suggestions\": [{ \"name\": \"meal name\", \"description\": \"brief description of the meal\", \"calories\": number, \"protein\": number, \"carbs\": number, \"fat\": number }] }" }],
+    }),
+  });
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error?.message || "API error " + res.status); }
+  const data = await res.json();
+  const raw = data.content?.[0]?.text || "";
+  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+}
+
+const C = { cal: "#FF6B35", pro: "#4ECDC4", carb: "#FFE66D", fat: "#FF6B6B", fib: "#95E88A", card: "rgba(255,255,255,0.04)", bord: "rgba(255,255,255,0.08)" };
+
+// ── Setup Screen ─────────────────────────────────────────────────────
+function SetupScreen({ onSave }) {
+  const [key, setKey] = useState("");
+  const [err, setErr] = useState("");
+  const [testing, setTesting] = useState(false);
+  async function handleSave() {
+    if (!key.trim().startsWith("sk-")) { setErr("Key should start with sk-"); return; }
+    setTesting(true); setErr("");
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": key.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 10, messages: [{ role: "user", content: "Say ok" }] }) });
+      if (!res.ok) throw new Error("Invalid key");
+      saveApiKey(key.trim()); onSave(key.trim());
+    } catch { setErr("Key didn't work. Check it and try again."); }
+    finally { setTesting(false); }
+  }
+  return e("div", { style: { height: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 24px", background: "linear-gradient(180deg, #0D0D0D, #111118)" } },
+    e("div", { style: { maxWidth: 380, width: "100%", animation: "fadeIn 0.5s ease" } },
+      e("div", { style: { textAlign: "center", marginBottom: 32 } },
+        e("div", { style: { fontSize: 48, marginBottom: 12 } }, "🔥"),
+        e("h1", { style: { fontFamily: "'Playfair Display', serif", fontSize: 32, fontWeight: 900, margin: "0 0 6px", background: "linear-gradient(135deg, #fff, rgba(255,255,255,0.6))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "Fuel Log"),
+        e("p", { style: { color: "rgba(255,255,255,0.35)", fontSize: 13 } }, "Voice-powered macro tracking.")
+      ),
+      e("div", { style: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, padding: 20 } },
+        e("div", { style: { fontSize: 12, color: "rgba(255,255,255,0.5)", marginBottom: 4 } }, "Anthropic API Key"),
+        e("p", { style: { fontSize: 11, color: "rgba(255,255,255,0.25)", marginBottom: 12, lineHeight: 1.4, fontFamily: "'DM Mono', monospace" } }, "Get yours at console.anthropic.com — stored on-device only."),
+        e("input", { type: "password", value: key, onChange: (ev) => setKey(ev.target.value), placeholder: "sk-ant-...", onKeyDown: (ev) => { if (ev.key === "Enter") handleSave(); }, style: { width: "100%", padding: "12px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#fff", fontSize: 14, fontFamily: "'DM Mono', monospace", outline: "none", marginBottom: 12 } }),
+        err && e("div", { style: { color: "#FF6B6B", fontSize: 12, marginBottom: 12, fontFamily: "'DM Mono', monospace" } }, err),
+        e("button", { onClick: handleSave, disabled: testing || !key.trim(), style: { width: "100%", padding: 14, background: key.trim() ? "linear-gradient(135deg, #FF6B35, #FF8855)" : "rgba(255,255,255,0.06)", border: "none", borderRadius: 12, color: "#fff", fontWeight: 700, fontSize: 14, cursor: key.trim() ? "pointer" : "default" } }, testing ? "Testing..." : "Connect & Start")
+      )
+    )
+  );
+}
+
+// ── Ring ──────────────────────────────────────────────────────────────
+function Ring({ value, max, color, label, unit }) {
+  const size = 88, stroke = 8, r = (size-stroke)/2, circ = 2*Math.PI*r;
+  const pct = max > 0 ? Math.min(value/max, 1) : 0;
+  const over = value > max, ac = over ? "#FF4444" : color;
+  const rem = Math.max(0, max - Math.round(value));
+  return e("div", { style: { textAlign: "center", width: size } },
+    e("div", { style: { position: "relative", width: size, height: size } },
+      e("svg", { width: size, height: size, style: { transform: "rotate(-90deg)" } },
+        e("circle", { cx: size/2, cy: size/2, r, fill: "none", stroke: color+"1a", strokeWidth: stroke }),
+        e("circle", { cx: size/2, cy: size/2, r, fill: "none", stroke: ac, strokeWidth: stroke, strokeDasharray: circ, strokeDashoffset: circ*(1-pct), strokeLinecap: "round", style: { transition: "stroke-dashoffset 0.6s ease", filter: "drop-shadow(0 0 6px "+ac+"77)" } })
+      ),
+      e("div", { style: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" } },
+        e("div", { style: { fontSize: 19, fontWeight: 700, color: ac, fontFamily: "'DM Mono', monospace", lineHeight: 1, letterSpacing: -0.5 } }, Math.round(value)),
+        e("div", { style: { fontSize: 9, color: "rgba(255,255,255,0.32)", fontFamily: "'DM Mono', monospace", marginTop: 2, letterSpacing: 0.3 } }, "/"+max)
+      )
+    ),
+    e("div", { style: { fontSize: 10, color: "rgba(255,255,255,0.6)", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'DM Sans', sans-serif", marginTop: 7, fontWeight: 600 } }, label),
+    e("div", { style: { fontSize: 9, color: over ? "#FF6B6B" : "rgba(255,255,255,0.28)", fontFamily: "'DM Mono', monospace", marginTop: 2, letterSpacing: 0.3 } }, over ? "+"+(Math.round(value)-max)+(unit||"g") : rem+(unit||"g")+" left")
+  );
+}
+
+// ── Settings ─────────────────────────────────────────────────────────
+function SettingsPanel({ goals, onSave, onClose, onClearKey }) {
+  const [draft, setDraft] = useState({ ...goals });
+  const fields = [
+    { key: "calories", label: "Calories", unit: "kcal", color: C.cal, step: 100 },
+    { key: "protein", label: "Protein", unit: "g", color: C.pro, step: 10 },
+    { key: "carbs", label: "Carbs", unit: "g", color: C.carb, step: 10 },
+    { key: "fat", label: "Fat", unit: "g", color: C.fat, step: 5 },
+  ];
+  function handleSave() { const c = {}; for (const f of fields) { const v = parseInt(draft[f.key],10); c[f.key] = isNaN(v)||v<0 ? DEFAULT_GOALS[f.key] : v; } onSave(c); }
+  return e("div", { style: { position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
+    e("div", { onClick: onClose, style: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" } }),
+    e("div", { style: { position: "relative", width: "100%", maxWidth: 440, background: "#161619", borderRadius: "20px 20px 0 0", padding: "20px 24px calc(34px + 16px)", border: "1px solid rgba(255,255,255,0.08)", borderBottom: "none", animation: "slideUp 0.3s ease" } },
+      e("div", { style: { width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.15)", margin: "0 auto 16px" } }),
+      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+        e("h2", { style: { margin: 0, fontSize: 20, fontFamily: "'Playfair Display', serif", fontWeight: 700, display: "flex", alignItems: "center", gap: 10 } },
+          e("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "rgba(255,255,255,0.55)", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+            e("circle", { cx: 12, cy: 12, r: 3 }),
+            e("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" })
+          ),
+          "Settings"
+        ),
+        e("button", { onClick: onClose, style: { background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 22, cursor: "pointer", padding: 4 } }, "×")
+      ),
+      e("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        fields.map(f =>
+          e("div", { key: f.key, style: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: "8px 12px" } },
+            e("div", { style: { width: 8, height: 8, borderRadius: "50%", background: f.color, flexShrink: 0 } }),
+            e("div", { style: { flex: 1 } },
+              e("div", { style: { fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 2 } }, f.label),
+              e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                e("input", { type: "number", inputMode: "numeric", value: draft[f.key], onChange: (ev) => setDraft(d => ({ ...d, [f.key]: ev.target.value })), onFocus: (ev) => ev.target.select(), style: { width: 72, padding: "5px 7px", background: "rgba(255,255,255,0.06)", border: "1px solid "+f.color+"33", borderRadius: 7, color: f.color, fontSize: 15, fontWeight: 700, fontFamily: "'DM Mono', monospace", outline: "none", textAlign: "right" } }),
+                e("span", { style: { fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace" } }, f.unit)
+              )
+            ),
+            e("div", { style: { display: "flex", flexDirection: "column", gap: 3 } },
+              e("button", { onClick: () => setDraft(d => ({ ...d, [f.key]: Math.max(0,(parseInt(d[f.key],10)||0)+f.step) })), style: { width: 26, height: 20, borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.4)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } }, "+"),
+              e("button", { onClick: () => setDraft(d => ({ ...d, [f.key]: Math.max(0,(parseInt(d[f.key],10)||0)-f.step) })), style: { width: 26, height: 20, borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.4)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" } }, "−")
+            )
+          )
+        )
+      ),
+      e("button", { onClick: handleSave, style: { width: "100%", marginTop: 16, padding: 13, background: "linear-gradient(135deg, #FF6B35, #FF8855)", border: "none", borderRadius: 11, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" } }, "Save Targets"),
+      e("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+        e("button", { onClick: () => setDraft({ ...DEFAULT_GOALS }), style: { flex: 1, padding: 9, background: "none", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, color: "rgba(255,255,255,0.3)", fontSize: 10, cursor: "pointer", fontFamily: "'DM Mono', monospace" } }, "RESET DEFAULTS"),
+        e("button", { onClick: onClearKey, style: { flex: 1, padding: 9, background: "none", border: "1px solid rgba(255,107,107,0.15)", borderRadius: 10, color: "rgba(255,107,107,0.5)", fontSize: 10, cursor: "pointer", fontFamily: "'DM Mono', monospace" } }, "CHANGE API KEY")
+      )
+    )
+  );
+}
+
+// ── Favorites Panel ──────────────────────────────────────────────────
+function FavoritesPanel({ favs, onClose, onLog, onRemove }) {
+  return e("div", { style: { position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
+    e("div", { onClick: onClose, style: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" } }),
+    e("div", { style: { position: "relative", width: "100%", maxWidth: 440, maxHeight: "85vh", background: "#161619", borderRadius: "20px 20px 0 0", padding: "20px 24px calc(34px + 16px)", border: "1px solid rgba(255,255,255,0.08)", borderBottom: "none", animation: "slideUp 0.3s ease", display: "flex", flexDirection: "column" } },
+      e("div", { style: { width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.15)", margin: "0 auto 16px" } }),
+      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
+        e("div", null,
+          e("h2", { style: { margin: 0, fontSize: 20, fontFamily: "'Playfair Display', serif", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 } }, e("span", { style: { color: C.carb, filter: "drop-shadow(0 0 6px "+C.carb+"88)" } }, "★"), "Favorites"),
+          e("p", { style: { margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.35)", fontFamily: "'DM Mono', monospace", letterSpacing: 0.5 } }, "Tap to log instantly")
+        ),
+        e("button", { onClick: onClose, style: { background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 24, cursor: "pointer", padding: 4 } }, "×")
+      ),
+      favs.length === 0
+        ? e("div", { style: { padding: "40px 20px", textAlign: "center" } },
+            e("div", { style: { fontSize: 40, opacity: 0.2, marginBottom: 12 } }, "☆"),
+            e("div", { style: { fontSize: 13, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 } }, "No favorites yet."),
+            e("div", { style: { fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 6, fontFamily: "'DM Mono', monospace" } }, "Tap ☆ on any logged item to save it.")
+          )
+        : e("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, flex: 1, WebkitOverflowScrolling: "touch" } },
+            favs.map(fav =>
+              e("div", { key: fav.id, style: { background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,230,109,0.12)", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 } },
+                e("button", { onClick: () => onLog(fav), style: { flex: 1, minWidth: 0, background: "none", border: "none", color: "#fff", textAlign: "left", cursor: "pointer", padding: 0 } },
+                  e("div", { style: { fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.95)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, fav.name),
+                  fav.quantity && e("div", { style: { fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 2 } }, fav.quantity),
+                  e("div", { style: { display: "flex", gap: 10, marginTop: 6, fontSize: 10, fontFamily: "'DM Mono', monospace" } },
+                    e("span", { style: { color: C.cal, fontWeight: 700 } }, fav.calories+" kcal"),
+                    e("span", { style: { color: C.pro } }, "P "+fav.protein),
+                    e("span", { style: { color: C.carb } }, "C "+fav.carbs),
+                    e("span", { style: { color: C.fat } }, "F "+fav.fat)
+                  )
+                ),
+                e("button", { onClick: () => onLog(fav), style: { flexShrink: 0, padding: "9px 14px", background: "linear-gradient(135deg, "+C.cal+", #FF8855)", border: "none", borderRadius: 9, color: "#fff", fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: 0.8, boxShadow: "0 3px 12px "+C.cal+"33" } }, "+ LOG"),
+                e("button", { onClick: () => onRemove(fav.id), title: "Remove favorite", style: { flexShrink: 0, width: 28, height: 28, background: "none", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 7, color: "rgba(255,255,255,0.25)", fontSize: 14, cursor: "pointer", padding: 0 } }, "×")
+              )
+            )
+          )
+    )
+  );
+}
+
+// ── History Panel ────────────────────────────────────────────────────
+function HistoryPanel({ history, goals, todayKey, onClose }) {
+  const dates = Object.keys(history).filter(d => (history[d]||[]).length > 0).sort().reverse();
+  const macroDefs = [
+    { key: "calories", label: "Calories", unit: "kcal", color: C.cal },
+    { key: "protein", label: "Protein", unit: "g", color: C.pro },
+    { key: "carbs", label: "Carbs", unit: "g", color: C.carb },
+    { key: "fat", label: "Fat", unit: "g", color: C.fat },
+  ];
+  const formatDate = (d) => {
+    if (d === todayKey) return "Today";
+    const dt = new Date(d + "T00:00:00");
+    return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  };
+  return e("div", { style: { position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
+    e("div", { onClick: onClose, style: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" } }),
+    e("div", { style: { position: "relative", width: "100%", maxWidth: 440, maxHeight: "88vh", background: "#161619", borderRadius: "20px 20px 0 0", padding: "20px 20px calc(34px + 16px)", border: "1px solid rgba(255,255,255,0.08)", borderBottom: "none", animation: "slideUp 0.3s ease", display: "flex", flexDirection: "column" } },
+      e("div", { style: { width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.15)", margin: "0 auto 16px" } }),
+      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, padding: "0 4px" } },
+        e("div", null,
+          e("h2", { style: { margin: 0, fontSize: 20, fontFamily: "'Playfair Display', serif", fontWeight: 700 } }, "History"),
+          e("p", { style: { margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.35)", fontFamily: "'DM Mono', monospace", letterSpacing: 0.5 } }, dates.length+" day"+(dates.length === 1 ? "" : "s")+" logged")
+        ),
+        e("button", { onClick: onClose, style: { background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 24, cursor: "pointer", padding: 4 } }, "×")
+      ),
+      dates.length === 0
+        ? e("div", { style: { padding: "40px 20px", textAlign: "center" } },
+            e("div", { style: { fontSize: 13, color: "rgba(255,255,255,0.4)" } }, "No history yet. Log your first meal to get started.")
+          )
+        : e("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, flex: 1, WebkitOverflowScrolling: "touch", padding: "0 4px" } },
+            dates.map(d => {
+              const tot = sumMacros(history[d] || []);
+              return e("div", { key: d, style: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "14px 16px" } },
+                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 } },
+                  e("div", { style: { fontSize: 14, fontWeight: 700, color: d === todayKey ? C.cal : "rgba(255,255,255,0.9)", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, formatDate(d)),
+                  e("div", { style: { fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", letterSpacing: 0.5 } }, (history[d]||[]).length+" items")
+                ),
+                e("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+                  macroDefs.map(m => {
+                    const v = Math.round(tot[m.key] || 0);
+                    const g = goals[m.key] || 1;
+                    const pct = Math.min((v/g)*100, 100);
+                    const over = v > g;
+                    const barC = over ? "#FF4444" : m.color;
+                    return e("div", { key: m.key, style: { display: "flex", alignItems: "center", gap: 10 } },
+                      e("div", { style: { width: 56, fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "'DM Mono', monospace", letterSpacing: 0.8, textTransform: "uppercase" } }, m.label),
+                      e("div", { style: { flex: 1, height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden", position: "relative" } },
+                        e("div", { style: { width: pct+"%", height: "100%", background: "linear-gradient(90deg, "+barC+"aa, "+barC+")", borderRadius: 4, boxShadow: "0 0 6px "+barC+"66" } })
+                      ),
+                      e("div", { style: { minWidth: 78, textAlign: "right", fontSize: 11, fontFamily: "'DM Mono', monospace", fontWeight: 600, color: barC } }, v+" / "+g)
+                    );
+                  })
+                )
+              );
+            })
+          )
+    )
+  );
+}
+
+// ── Main App ─────────────────────────────────────────────────────────
+function MacroTracker({ apiKey, onClearKey }) {
+  const [history, setHistory] = useState(() => loadHistory());
+  const [favs, setFavs] = useState(() => loadFavs());
+  const [goals, setGoals] = useState(() => loadGoals());
+  const [showSettings, setShowSettings] = useState(false);
+  const [showFavs, setShowFavs] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [manualInput, setManualInput] = useState("");
+  const [showManual, setShowManual] = useState(false);
+  const [lastAdded, setLastAdded] = useState(null);
+  const [suggestion, setSuggestion] = useState(null);
+  const [loadingSuggestion, setLoadingSuggestion] = useState(false);
+  const recRef = useRef(null);
+  const [selectedDate, setSelectedDate] = useState(() => today());
+
+  const todayKey = today();
+  const entries = history[selectedDate] || [];
+  const isToday = selectedDate === todayKey;
+
+  const shiftDate = (days) => {
+    const d = new Date(selectedDate + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    const next = d.toISOString().slice(0, 10);
+    if (next > todayKey) return;
+    setSelectedDate(next);
+    setLastAdded(null);
+  };
+
+  useEffect(() => { saveHistory(history); }, [history]);
+  useEffect(() => { saveFavs(favs); }, [favs]);
+  useEffect(() => { saveGoals(goals); }, [goals]);
+
+  const totals = sumMacros(entries);
+  const rem = { calories: Math.max(0, goals.calories - totals.calories), protein: Math.max(0, goals.protein - totals.protein), carbs: Math.max(0, goals.carbs - totals.carbs), fat: Math.max(0, goals.fat - totals.fat) };
+  const hasEntries = entries.length > 0;
+
+  const addEntries = (ne) => setHistory(h => ({ ...h, [selectedDate]: [ ...(h[selectedDate]||[]), ...ne ] }));
+  const addFavorite = (item) => {
+    setFavs(f => {
+      if (f.some(x => x.name.toLowerCase() === item.name.toLowerCase() && x.calories === item.calories)) return f;
+      return [{ id: Date.now()+Math.random(), name: item.name, quantity: item.quantity, calories: item.calories, protein: item.protein, carbs: item.carbs, fat: item.fat }, ...f];
+    });
+  };
+  const removeFavorite = (id) => setFavs(f => f.filter(x => x.id !== id));
+  const logFavorite = (fav) => {
+    const ne = [{ ...fav, id: Date.now()+Math.random(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }];
+    addEntries(ne); setLastAdded(ne); setShowFavs(false);
+  };
+
+  const startListening = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setError("Speech not supported. Use Chrome or Safari."); return; }
+    const r = new SR(); r.continuous = false; r.interimResults = true; r.lang = "en-US"; recRef.current = r;
+    r.onresult = (ev) => { setTranscript(Array.from(ev.results).map(r => r[0].transcript).join("")); };
+    r.onend = () => setListening(false);
+    r.onerror = (ev) => { setListening(false); if (ev.error !== "no-speech") setError("Mic error: " + ev.error); };
+    r.start(); setListening(true); setTranscript(""); setError("");
+  }, []);
+  const stopListening = useCallback(() => { recRef.current?.stop(); setListening(false); }, []);
+
+  const processFood = useCallback(async (text) => {
+    if (!text.trim()) return;
+    setLoading(true); setError(""); setLastAdded(null);
+    try {
+      const result = await analyzeFood(text, apiKey);
+      if (!result.items?.length) throw new Error("No food items detected");
+      const ne = result.items.map(item => ({ ...item, id: Date.now()+Math.random(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }));
+      addEntries(ne);
+      setLastAdded(ne); setTranscript(""); setManualInput("");
+    } catch (err) { setError(err.message || "Failed to analyze food"); }
+    finally { setLoading(false); }
+  }, [apiKey, selectedDate]);
+
+  const removeEntry = (id) => { setHistory(h => ({ ...h, [selectedDate]: (h[selectedDate]||[]).filter(x => x.id !== id) })); };
+  const clearDay = () => { if (confirm("Clear all entries for "+(isToday ? "today" : "this day")+"?")) { setHistory(h => { const n = { ...h }; delete n[selectedDate]; return n; }); setLastAdded(null); } };
+
+  const micSvg = e("svg", { width: 24, height: 24, viewBox: "0 0 24 24", fill: "none", stroke: listening ? C.cal : "rgba(255,255,255,0.5)", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", style: { margin: "0 auto", display: "block" } },
+    e("path", { d: "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" }), e("path", { d: "M19 10v2a7 7 0 0 1-14 0v-2" }), e("line", { x1:12,y1:19,x2:12,y2:23 }), e("line", { x1:8,y1:23,x2:16,y2:23 })
+  );
+  const gearSvg = e("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+    e("circle", { cx:12,cy:12,r:3 }), e("path", { d: "M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" })
+  );
+
+  // iPhone 17 Pro Max: 440x956pt, safe area top:62 bottom:34
+  // Usable height ~860pt. Layout: header+hero+rings+remaining+mic+content
+  return e("div", null,
+    e("div", { style: { height: "100dvh", background: "radial-gradient(ellipse 90% 60% at 50% 0%, #1a1108 0%, #0D0D0D 45%, #0a0a0f 100%)", color: "#fff", fontFamily: "'DM Sans', sans-serif", maxWidth: 440, margin: "0 auto", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" } },
+
+      // Ambient glows
+      e("div", { style: { position: "absolute", top: -80, left: "50%", transform: "translateX(-50%)", width: 360, height: 360, background: "radial-gradient(circle, "+C.cal+"22 0%, transparent 60%)", filter: "blur(40px)", pointerEvents: "none", animation: "drift 9s ease-in-out infinite" } }),
+      e("div", { style: { position: "absolute", bottom: -60, right: -60, width: 280, height: 280, background: "radial-gradient(circle, "+C.pro+"12 0%, transparent 65%)", filter: "blur(50px)", pointerEvents: "none" } }),
+      e("div", { className: "grain" }),
+
+      // ── Fixed top section ──
+      e("div", { style: { position: "relative", flexShrink: 0, padding: "16px 20px 0" } },
+
+        // Header row
+        e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
+          e("div", null,
+            e("h1", { style: { fontFamily: "'Playfair Display', serif", fontSize: 30, fontWeight: 900, margin: 0, letterSpacing: -0.5, background: "linear-gradient(135deg, #fff, rgba(255,255,255,0.6))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } }, "Fuel Log"),
+            e("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 5 } },
+              e("button", { onClick: () => shiftDate(-1), title: "Previous day", style: { width: 22, height: 22, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "rgba(255,255,255,0.55)", fontSize: 12, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 } }, "‹"),
+              e("div", { onClick: () => !isToday && setSelectedDate(todayKey), style: { fontSize: 11, color: isToday ? "rgba(255,255,255,0.4)" : C.cal, letterSpacing: 1.6, textTransform: "uppercase", fontFamily: "'DM Mono', monospace", minWidth: 130, textAlign: "center", cursor: isToday ? "default" : "pointer", fontWeight: isToday ? 400 : 600 } },
+                isToday
+                  ? new Date(selectedDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
+                  : "↻ " + new Date(selectedDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+              ),
+              e("button", { onClick: () => shiftDate(1), disabled: isToday, title: "Next day", style: { width: 22, height: 22, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: isToday ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.55)", fontSize: 12, cursor: isToday ? "default" : "pointer", padding: 0, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 } }, "›")
+            )
+          ),
+          e("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" } },
+            e("button", { onClick: () => setShowHistory(true), title: "History", style: { width: 34, height: 34, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.65)", borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 } },
+              e("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+                e("path", { d: "M3 12a9 9 0 1 0 3-6.7L3 8" }), e("path", { d: "M3 3v5h5" }), e("path", { d: "M12 7v5l3 2" })
+              )
+            ),
+            e("button", { onClick: () => setShowFavs(true), title: "Favorites", style: { width: 34, height: 34, background: "rgba(255,230,109,0.06)", border: "1px solid rgba(255,230,109,0.2)", color: C.carb, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, position: "relative" } },
+              e("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "currentColor", stroke: "currentColor", strokeWidth: 1.5, strokeLinejoin: "round" },
+                e("path", { d: "M12 2l3 6.5 7 .9-5.1 4.8 1.3 7L12 17.8 5.8 21.2l1.3-7L2 9.4l7-.9z" })
+              ),
+              favs.length > 0 && e("span", { style: { position: "absolute", top: -4, right: -4, minWidth: 15, height: 15, padding: "0 4px", background: C.cal, color: "#0D0D0D", fontSize: 9, fontWeight: 700, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Mono', monospace" } }, favs.length)
+            ),
+            e("button", { onClick: () => setShowSettings(true), title: "Targets", style: { width: 34, height: 34, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.65)", borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 } }, gearSvg),
+            hasEntries && e("button", { onClick: clearDay, style: { background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.25)", color: "#FF6B6B", fontSize: 10, padding: "0 10px", height: 34, borderRadius: 9, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 0.8 } }, "CLEAR")
+          )
+        ),
+
+        // 4 macro dials
+        e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", margin: "18px 0 14px", padding: "0 2px", gap: 4 } },
+          e(Ring, { value: totals.calories, max: goals.calories, color: C.cal, label: "Calories", unit: "" }),
+          e(Ring, { value: totals.protein, max: goals.protein, color: C.pro, label: "Protein", unit: "g" }),
+          e(Ring, { value: totals.carbs, max: goals.carbs, color: C.carb, label: "Carbs", unit: "g" }),
+          e(Ring, { value: totals.fat, max: goals.fat, color: C.fat, label: "Fat", unit: "g" })
+        ),
+
+        // Mic (left) + Type Instead (right) — horizontal row
+        e("div", { style: { display: "flex", alignItems: "center", gap: 12, margin: "10px 0 6px" } },
+          e("button", { onClick: listening ? stopListening : startListening, disabled: loading, style: {
+            flexShrink: 0,
+            width: 64, height: 64, borderRadius: "50%",
+            border: listening ? "2px solid "+C.cal : "1.5px solid rgba(255,255,255,0.18)",
+            background: listening ? "radial-gradient(circle, "+C.cal+"33 0%, "+C.cal+"08 60%, transparent 75%)" : "radial-gradient(circle at 30% 25%, rgba(255,255,255,0.08), rgba(255,255,255,0.02))",
+            cursor: loading ? "wait" : "pointer", position: "relative", transition: "all 0.3s ease",
+            boxShadow: listening ? "0 0 40px "+C.cal+"55, inset 0 0 20px "+C.cal+"22" : "0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.08)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          } },
+            loading ? e("div", { style: { width: 20, height: 20, border: "2px solid rgba(255,255,255,0.15)", borderTopColor: C.cal, borderRadius: "50%", animation: "spin 0.8s linear infinite" } }) : micSvg,
+            listening && e("div", { style: { position: "absolute", inset: -6, borderRadius: "50%", border: "1.5px solid "+C.cal+"66", animation: "pulse 1.5s ease-in-out infinite", pointerEvents: "none" } }),
+            listening && e("div", { style: { position: "absolute", inset: -12, borderRadius: "50%", border: "1px solid "+C.cal+"33", animation: "pulse 1.5s ease-in-out 0.3s infinite", pointerEvents: "none" } })
+          ),
+          e("button", { onClick: () => setShowManual(!showManual), className: "type-btn", style: {
+            flex: 1,
+            height: 64,
+            padding: "0 20px",
+            background: showManual ? "linear-gradient(135deg, rgba(255,107,53,0.22), rgba(255,136,85,0.08))" : "linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))",
+            border: "1px solid "+(showManual ? C.cal+"66" : "rgba(255,255,255,0.14)"),
+            borderRadius: 18,
+            color: showManual ? "#fff" : "rgba(255,255,255,0.92)",
+            fontSize: 15,
+            fontWeight: 700,
+            letterSpacing: 0.8,
+            cursor: "pointer",
+            fontFamily: "'DM Sans', sans-serif",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            transition: "all 0.25s ease",
+            boxShadow: showManual ? "0 4px 20px "+C.cal+"33" : "0 2px 10px rgba(0,0,0,0.3)",
+          } },
+            e("svg", { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+              e("rect", { x: 2, y: 6, width: 20, height: 12, rx: 2 }),
+              e("path", { d: "M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" })
+            ),
+            showManual ? "Hide Keyboard" : "Type Instead"
+          )
+        ),
+        e("div", { style: { textAlign: "center", fontSize: 10, color: listening ? C.cal : "rgba(255,255,255,0.3)", marginTop: 6, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'DM Mono', monospace", fontWeight: 500, minHeight: 12 } },
+          listening ? "◉ Listening — tap mic to stop" : loading ? "Analyzing…" : ""
+        )
+      ),
+
+      // ── Scrollable content ──
+      e("div", { style: { position: "relative", flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 20px 16px", WebkitOverflowScrolling: "touch" } },
+
+        // Make Suggestion button
+        e("button", { onClick: async () => {
+          setLoadingSuggestion(true); setSuggestion(null);
+          try {
+            const result = await suggestMeal(rem, apiKey);
+            if (!result.suggestions?.length) throw new Error("No suggestions returned");
+            setSuggestion(result.suggestions);
+          } catch (err) { setError(err.message || "Failed to get suggestions"); }
+          finally { setLoadingSuggestion(false); }
+        }, disabled: loadingSuggestion || (rem.calories <= 0 && rem.protein <= 0 && rem.carbs <= 0 && rem.fat <= 0), style: {
+          width: "100%", padding: "13px 20px", margin: "8px 0",
+          background: (rem.calories <= 0 && rem.protein <= 0 && rem.carbs <= 0 && rem.fat <= 0) ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg, rgba(78,205,196,0.15), rgba(78,205,196,0.05))",
+          border: "1px solid " + ((rem.calories <= 0 && rem.protein <= 0 && rem.carbs <= 0 && rem.fat <= 0) ? "rgba(255,255,255,0.06)" : C.pro+"44"),
+          borderRadius: 14, color: (rem.calories <= 0 && rem.protein <= 0 && rem.carbs <= 0 && rem.fat <= 0) ? "rgba(255,255,255,0.25)" : "#fff",
+          fontSize: 14, fontWeight: 700, cursor: (rem.calories <= 0 && rem.protein <= 0 && rem.carbs <= 0 && rem.fat <= 0) ? "default" : "pointer",
+          fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          boxShadow: loadingSuggestion ? "none" : "0 2px 12px rgba(78,205,196,0.15)", transition: "all 0.25s ease",
+        } },
+          loadingSuggestion
+            ? e("div", { style: { width: 18, height: 18, border: "2px solid rgba(255,255,255,0.15)", borderTopColor: C.pro, borderRadius: "50%", animation: "spin 0.8s linear infinite" } })
+            : e("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+                e("path", { d: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" })
+              ),
+          loadingSuggestion ? "Thinking..." : "Make Suggestion"
+        ),
+
+        // Suggestion card
+        suggestion && e("div", { style: { background: "rgba(78,205,196,0.06)", border: "1px solid rgba(78,205,196,0.18)", borderRadius: 12, padding: "14px 16px", margin: "8px 0", animation: "fadeIn 0.3s ease" } },
+          e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+            e("div", { style: { fontSize: 9, color: C.pro, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'DM Mono', monospace", fontWeight: 600 } }, "Suggested Meals"),
+            e("button", { onClick: () => setSuggestion(null), style: { background: "none", border: "none", color: "rgba(255,255,255,0.25)", fontSize: 16, cursor: "pointer", padding: 2, lineHeight: 1 } }, "×")
+          ),
+          suggestion.map((s, i) =>
+            e("div", { key: i, style: { padding: "10px 0", borderTop: i > 0 ? "1px solid rgba(255,255,255,0.06)" : "none" } },
+              e("div", { style: { fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.9)", marginBottom: 3 } }, s.name),
+              s.description && e("div", { style: { fontSize: 11, color: "rgba(255,255,255,0.4)", lineHeight: 1.4, marginBottom: 8 } }, s.description),
+              e("div", { style: { display: "flex", gap: 10, fontSize: 10, fontFamily: "'DM Mono', monospace" } },
+                e("span", { style: { color: C.cal, fontWeight: 700 } }, s.calories+" kcal"),
+                e("span", { style: { color: C.pro } }, "P "+s.protein+"g"),
+                e("span", { style: { color: C.carb } }, "C "+s.carbs+"g"),
+                e("span", { style: { color: C.fat } }, "F "+s.fat+"g")
+              )
+            )
+          ),
+          e("div", { style: { display: "flex", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" } },
+            e("div", { style: { fontSize: 10, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace", flex: 1, display: "flex", alignItems: "center" } },
+              "Total: " + suggestion.reduce((a, s) => a + (s.calories||0), 0) + " kcal / P " + suggestion.reduce((a, s) => a + (s.protein||0), 0) + "g / C " + suggestion.reduce((a, s) => a + (s.carbs||0), 0) + "g / F " + suggestion.reduce((a, s) => a + (s.fat||0), 0) + "g"
+            )
+          )
+        ),
+
+        // Transcript
+        transcript && !listening && e("div", { style: { background: C.card, border: "1px solid "+C.bord, borderRadius: 10, padding: "10px 14px", margin: "8px 0" } },
+          e("div", { style: { fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 4, fontFamily: "'DM Mono', monospace" } }, "I heard:"),
+          e("div", { style: { fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.85)" } }, transcript),
+          e("div", { style: { display: "flex", gap: 6, marginTop: 10 } },
+            e("button", { onClick: () => processFood(transcript), disabled: loading, style: { flex: 1, padding: 9, background: "linear-gradient(135deg, "+C.cal+", #FF8855)", border: "none", borderRadius: 7, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Log This"),
+            e("button", { onClick: () => setTranscript(""), style: { padding: "9px 14px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7, color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" } }, "Clear")
+          )
+        ),
+
+        listening && transcript && e("div", { style: { textAlign: "center", fontSize: 13, color: "rgba(255,255,255,0.5)", margin: "8px 0", fontStyle: "italic" } }, '"'+transcript+'"'),
+
+        // Manual input
+        showManual && e("div", { style: { margin: "12px 0 8px", display: "flex", gap: 8, animation: "fadeIn 0.25s ease" } },
+          e("input", { type: "text", autoFocus: true, value: manualInput, onChange: (ev) => setManualInput(ev.target.value), onKeyDown: (ev) => { if (ev.key === "Enter" && manualInput.trim()) processFood(manualInput); }, placeholder: "e.g. 3 egg whites and a banana", style: { flex: 1, padding: "13px 15px", background: "rgba(255,255,255,0.05)", border: "1px solid "+C.cal+"33", borderRadius: 12, color: "#fff", fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" } }),
+          e("button", { onClick: () => processFood(manualInput), disabled: loading||!manualInput.trim(), style: { padding: "13px 18px", background: manualInput.trim() ? "linear-gradient(135deg, "+C.cal+", #FF8855)" : "rgba(255,255,255,0.06)", border: "none", borderRadius: 12, color: "#fff", fontWeight: 700, fontSize: 13, cursor: manualInput.trim() ? "pointer" : "default", letterSpacing: 0.5, boxShadow: manualInput.trim() ? "0 4px 16px "+C.cal+"44" : "none" } }, "LOG")
+        ),
+
+        error && e("div", { style: { background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.2)", borderRadius: 9, padding: "8px 12px", fontSize: 11, color: "#FF6B6B", margin: "8px 0", fontFamily: "'DM Mono', monospace" } }, error),
+
+        // Just added
+        lastAdded && e("div", { style: { background: "rgba(78,205,196,0.06)", border: "1px solid rgba(78,205,196,0.15)", borderRadius: 10, padding: "10px 14px", margin: "8px 0" } },
+          e("div", { style: { fontSize: 9, color: C.pro, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'DM Mono', monospace", marginBottom: 8 } }, "✓ Logged"),
+          lastAdded.map((item, i) =>
+            e("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: i < lastAdded.length-1 ? "1px solid rgba(255,255,255,0.04)" : "none" } },
+              e("div", null,
+                e("div", { style: { fontSize: 12, color: "rgba(255,255,255,0.85)" } }, item.name),
+                e("div", { style: { fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 1 } }, item.quantity)
+              ),
+              e("div", { style: { fontSize: 12, fontFamily: "'DM Mono', monospace", color: C.cal, fontWeight: 500 } }, item.calories+" kcal")
+            )
+          )
+        ),
+
+        // Food log
+        hasEntries && e("div", { style: { marginTop: 12 } },
+          e("div", { style: { fontSize: 9, color: "rgba(255,255,255,0.25)", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'DM Mono', monospace", marginBottom: 8 } }, (isToday ? "Today's Log" : "Log")+" ("+entries.length+" items)"),
+          entries.map(entry => {
+            const isFav = favs.some(x => x.name.toLowerCase() === entry.name.toLowerCase() && x.calories === entry.calories);
+            return e("div", { key: entry.id, style: { background: C.card, border: "1px solid "+C.bord, borderRadius: 9, padding: "10px 12px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+              e("div", { style: { flex: 1, minWidth: 0 } },
+                e("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                  e("span", { style: { fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, entry.name),
+                  e("span", { style: { fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace", flexShrink: 0 } }, entry.time)
+                ),
+                e("div", { style: { display: "flex", gap: 8, marginTop: 3, fontSize: 9, fontFamily: "'DM Mono', monospace" } },
+                  e("span", { style: { color: C.pro } }, "P "+entry.protein+"g"),
+                  e("span", { style: { color: C.carb } }, "C "+entry.carbs+"g"),
+                  e("span", { style: { color: C.fat } }, "F "+entry.fat+"g")
+                )
+              ),
+              e("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
+                e("span", { style: { fontSize: 13, fontFamily: "'DM Mono', monospace", fontWeight: 700, color: C.cal, marginRight: 4 } }, entry.calories),
+                e("button", { onClick: () => isFav ? null : addFavorite(entry), title: isFav ? "Already a favorite" : "Save as favorite", style: { background: "none", border: "none", color: isFav ? C.carb : "rgba(255,255,255,0.2)", cursor: isFav ? "default" : "pointer", fontSize: 16, lineHeight: 1, padding: 3, filter: isFav ? "drop-shadow(0 0 4px "+C.carb+"88)" : "none" } }, isFav ? "★" : "☆"),
+                e("button", { onClick: () => removeEntry(entry.id), style: { background: "none", border: "none", color: "rgba(255,255,255,0.15)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 3 } }, "×")
+              )
+            );
+          })
+        )
+      )
+    ),
+
+    showSettings && e(SettingsPanel, { goals, onClose: () => setShowSettings(false), onSave: (g) => { setGoals(g); setShowSettings(false); }, onClearKey }),
+    showFavs && e(FavoritesPanel, { favs, onClose: () => setShowFavs(false), onLog: logFavorite, onRemove: removeFavorite }),
+    showHistory && e(HistoryPanel, { history, goals, todayKey, onClose: () => setShowHistory(false) })
+  );
+}
+
+// ── Root ──────────────────────────────────────────────────────────────
+function App() {
+  const [apiKey, setApiKey] = useState(() => loadApiKey());
+  if (!apiKey) return e(SetupScreen, { onSave: setApiKey });
+  return e(MacroTracker, { apiKey, onClearKey: () => { localStorage.removeItem(API_KEY_KEY); setApiKey(""); } });
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
+</script>
+</body>
+</html>
