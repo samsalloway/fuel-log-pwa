@@ -76,8 +76,9 @@ const WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 const WHOOP_OAUTH_STATE_KEY = "whoop_oauth_state";
 const WHOOP_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-function today() { return new Date().toISOString().slice(0, 10); }
-function dateKey(d) { return d.toISOString().slice(0, 10); }
+const APP_TZ = "America/New_York";
+function today() { return new Date().toLocaleDateString("en-CA", { timeZone: APP_TZ }); }
+function dateKey(d) { return d.toLocaleDateString("en-CA", { timeZone: APP_TZ }); }
 const SEED_FLAG = "macro-tracker-seed-20260413";
 const SEED_20260413 = [
   { name: "ALLMAX ISOFlex shake", quantity: "1 scoop", calories: 120, protein: 27, carbs: 1, fat: 0.5, time: "08:00" },
@@ -1769,6 +1770,8 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
   const [selectedDate, setSelectedDate] = useState(() => today());
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
+  const [movingId, setMovingId] = useState(null);
+  const [moveTargetDate, setMoveTargetDate] = useState("");
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeState, setBarcodeState] = useState(null);
   // Whoop state
@@ -1997,6 +2000,23 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
     setEditingId(null); setEditDraft(null);
   };
   const clearDay = () => { if (confirm("Clear all entries for "+(isToday ? "today" : "this day")+"?")) { setHistory(h => { const n = { ...h }; delete n[selectedDate]; return n; }); setLastAdded(null); } };
+  const startMove = (entry) => { setEditingId(null); setEditDraft(null); setMovingId(entry.id); setMoveTargetDate(selectedDate); };
+  const cancelMove = () => { setMovingId(null); setMoveTargetDate(""); };
+  const commitMove = () => {
+    if (!movingId || !moveTargetDate || moveTargetDate === selectedDate) { cancelMove(); return; }
+    setHistory(h => {
+      const src = h[selectedDate] || [];
+      const entry = src.find(x => x.id === movingId);
+      if (!entry) return h;
+      const remaining = src.filter(x => x.id !== movingId);
+      const dst = [...(h[moveTargetDate] || []), entry].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+      const next = { ...h };
+      if (remaining.length) next[selectedDate] = remaining; else delete next[selectedDate];
+      next[moveTargetDate] = dst;
+      return next;
+    });
+    cancelMove();
+  };
 
   const micSvg = e("svg", { width: 24, height: 24, viewBox: "0 0 24 24", fill: "none", stroke: listening ? t.accent : t.textDim, strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", style: { margin: "0 auto", display: "block" } },
     e("path", { d: "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" }), e("path", { d: "M19 10v2a7 7 0 0 1-14 0v-2" }), e("line", { x1:12,y1:19,x2:12,y2:23 }), e("line", { x1:8,y1:23,x2:16,y2:23 })
@@ -2235,6 +2255,17 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
           e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.8, textTransform: "uppercase", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginBottom: 10 } }, (isToday ? "Today's Log" : "Log")+" ("+entries.length+" items)"),
           entries.map(entry => {
             const isFav = favs.some(x => x.name.toLowerCase() === entry.name.toLowerCase() && x.calories === entry.calories);
+            if (movingId === entry.id) {
+              return e("div", { key: entry.id, className: "soft-fade", style: { background: t.surfaceElevated, border: "1px solid "+t.accent+"40", borderRadius: 14, padding: "14px", marginBottom: 8 } },
+                e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 1.8, textTransform: "uppercase", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginBottom: 8 } }, "Move entry to"),
+                e("div", { style: { fontSize: 12.5, color: t.text, fontWeight: 500, marginBottom: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, entry.name),
+                e("input", { type: "date", value: moveTargetDate, max: todayKey, onChange: (ev) => setMoveTargetDate(ev.target.value), style: { width: "100%", padding: "10px 12px", background: t.inputBg, border: "1px solid "+t.border, borderRadius: 10, color: t.text, fontSize: 13, fontFamily: "'DM Mono', monospace", outline: "none", marginBottom: 12, boxSizing: "border-box" } }),
+                e("div", { style: { display: "flex", gap: 8 } },
+                  e("button", { onClick: cancelMove, style: { flex: 1, padding: "10px 14px", background: "none", border: "1px solid "+t.border, borderRadius: 10, color: t.textDim, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, "Cancel"),
+                  e("button", { onClick: commitMove, disabled: !moveTargetDate || moveTargetDate === selectedDate, style: { flex: 1, padding: "10px 14px", background: (!moveTargetDate || moveTargetDate === selectedDate) ? t.surface : t.accent, border: "none", borderRadius: 10, color: (!moveTargetDate || moveTargetDate === selectedDate) ? t.textMuted : t.onAccent, fontSize: 12, fontWeight: 600, cursor: (!moveTargetDate || moveTargetDate === selectedDate) ? "default" : "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3, boxShadow: (!moveTargetDate || moveTargetDate === selectedDate) ? "none" : "0 3px 12px "+t.shadow } }, "Move")
+                )
+              );
+            }
             if (editingId === entry.id && editDraft) {
               const macroField = (key, label, color) => e("div", { key, style: { display: "flex", flexDirection: "column", gap: 3 } },
                 e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 0.5, textTransform: "uppercase", fontWeight: 600 } }, label),
@@ -2277,6 +2308,15 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
                   e("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
                     e("path", { d: "M12 20h9" }),
                     e("path", { d: "M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" })
+                  )
+                ),
+                e("button", { onClick: () => startMove(entry), title: "Move to another day", style: { background: "none", border: "none", color: t.textFaint, cursor: "pointer", padding: 4, display: "flex", alignItems: "center" } },
+                  e("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+                    e("rect", { x: 3, y: 4, width: 18, height: 18, rx: 2, ry: 2 }),
+                    e("line", { x1: 16, y1: 2, x2: 16, y2: 6 }),
+                    e("line", { x1: 8, y1: 2, x2: 8, y2: 6 }),
+                    e("line", { x1: 3, y1: 10, x2: 21, y2: 10 }),
+                    e("path", { d: "M11 14l3 3-3 3", strokeLinejoin: "round" })
                   )
                 ),
                 e("button", { onClick: () => removeEntry(entry.id), title: "Delete entry", style: { background: "none", border: "none", color: t.textFaint, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 4 } }, "×")
