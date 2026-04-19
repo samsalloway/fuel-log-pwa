@@ -647,9 +647,9 @@ function Ring({ value, max, color, label, unit, mode = "limit" }) {
   const over = value > max;
   const targetHit = mode === "target" && max > 0 && value >= max;
   // limit-mode (cal/carbs/fat): green while under, red when over.
-  // target-mode (protein): brand color while under, green when at/above.
+  // target-mode (protein): red until target hit, green at/above.
   const ac = mode === "target"
-    ? (targetHit ? t.good : color)
+    ? (targetHit ? t.good : t.danger)
     : (over ? t.danger : t.good);
   const rem = Math.max(0, max - Math.round(value));
   const unitLabel = unit || (label === "Calories" ? "" : "g");
