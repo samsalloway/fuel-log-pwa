@@ -45,6 +45,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 
 <script>
 const e = React.createElement;
@@ -537,6 +538,7 @@ const themes = {
     carb: "#D9A441",
     fat: "#C27B7B",
     fib: "#88A68A",
+    good: "#5C8E5E",
     accent: "#C97B4F",
     accentSoft: "rgba(201,123,79,0.14)",
     danger: "#B85454",
@@ -569,6 +571,7 @@ const themes = {
     carb: "#E6BB6B",
     fat: "#D89999",
     fib: "#A8C4A8",
+    good: "#82B884",
     accent: "#E89B73",
     accentSoft: "rgba(232,155,115,0.14)",
     danger: "#E58585",
@@ -641,8 +644,13 @@ function Ring({ value, max, color, label, unit, mode = "limit" }) {
   const t = useTheme();
   const size = 88, stroke = 8, r = (size-stroke)/2, circ = 2*Math.PI*r;
   const pct = max > 0 ? Math.min(value/max, 1) : 0;
-  const over = value > max, ac = over ? t.danger : color;
+  const over = value > max;
   const targetHit = mode === "target" && max > 0 && value >= max;
+  // limit-mode (cal/carbs/fat): green while under, red when over.
+  // target-mode (protein): brand color while under, green when at/above.
+  const ac = mode === "target"
+    ? (targetHit ? t.good : color)
+    : (over ? t.danger : t.good);
   const rem = Math.max(0, max - Math.round(value));
   const unitLabel = unit || (label === "Calories" ? "" : "g");
   let subLabel;
@@ -651,7 +659,7 @@ function Ring({ value, max, color, label, unit, mode = "limit" }) {
   } else {
     subLabel = over ? "+"+(Math.round(value)-max)+unitLabel+" over" : rem+unitLabel+" left";
   }
-  const subColor = over ? t.danger : targetHit ? color : t.textMuted;
+  const subColor = over ? t.danger : targetHit ? t.good : t.textMuted;
   return e("div", { style: { textAlign: "center", width: size } },
     e("div", { style: { position: "relative", width: size, height: size } },
       e("svg", { width: size, height: size, style: { transform: "rotate(-90deg)" } },
@@ -662,7 +670,7 @@ function Ring({ value, max, color, label, unit, mode = "limit" }) {
         e("div", { style: { fontSize: 20, fontWeight: 600, color: ac, fontFamily: "'DM Sans', sans-serif", fontVariantNumeric: "tabular-nums", lineHeight: 1, letterSpacing: -0.3 } }, Math.round(value)),
         e("div", { style: { fontSize: 9, color: t.textMuted, fontFamily: "'DM Mono', monospace", marginTop: 3, letterSpacing: 0.3 } }, "/"+max)
       ),
-      targetHit && e("div", { title: label + " goal reached", style: { position: "absolute", top: -2, right: -2, width: 20, height: 20, borderRadius: "50%", background: over ? t.danger : color, border: "2px solid "+t.bg, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px "+(over ? t.danger : color)+"66", animation: "fadeIn 0.35s ease" } },
+      targetHit && e("div", { title: label + " goal reached", style: { position: "absolute", top: -2, right: -2, width: 20, height: 20, borderRadius: "50%", background: t.good, border: "2px solid "+t.bg, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px "+t.good+"66", animation: "fadeIn 0.35s ease" } },
         e("svg", { width: 10, height: 10, viewBox: "0 0 24 24", fill: "none", stroke: t.onAccent, strokeWidth: 3.5, strokeLinecap: "round", strokeLinejoin: "round" },
           e("polyline", { points: "20 6 9 17 4 12" })
         )
@@ -1252,7 +1260,7 @@ function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSav
                 ),
                 ingestError && e("div", { style: { fontSize: 11, color: t.danger, marginBottom: 8, fontFamily: "'DM Mono', monospace" } }, ingestError),
                 e("div", { style: { display: "flex", gap: 8 } },
-                  e("input", { ref: fileRef, type: "file", accept: "image/*", capture: "environment", onChange: handleScreenshot, style: { display: "none" } }),
+                  e("input", { ref: fileRef, type: "file", accept: "image/*", onChange: handleScreenshot, style: { display: "none" } }),
                   e("button", { onClick: () => fileRef.current?.click(), disabled: ingesting, style: { flex: 1, padding: "11px 14px", background: t.surfaceSolid, border: "1px solid "+t.border, borderRadius: 12, color: t.textDim, fontSize: 12, fontWeight: 600, cursor: ingesting ? "wait" : "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 } },
                     ingesting
                       ? e("div", { style: { width: 14, height: 14, border: "2px solid "+t.border, borderTopColor: t.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite" } })
@@ -1378,11 +1386,8 @@ function BarcodeScanner({ onDetect, onClose }) {
 
   useEffect(() => {
     let cancelled = false;
-    async function start() {
-      if (typeof window.BarcodeDetector === "undefined") {
-        setError("Barcode scanning isn't supported in this browser. Use Chrome, Edge, or Safari 17+.");
-        return;
-      }
+    let zxingReader = null;
+    async function startNative() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
         if (cancelled) { stream.getTracks().forEach(tr => tr.stop()); return; }
@@ -1416,11 +1421,54 @@ function BarcodeScanner({ onDetect, onClose }) {
         setError("Couldn't access camera. Check permissions and try again.");
       }
     }
-    start();
+    async function startZXing() {
+      if (typeof window.ZXing === "undefined" || !window.ZXing.BrowserMultiFormatReader) {
+        setError("Barcode scanner library couldn't load. Check your connection and try again.");
+        return;
+      }
+      try {
+        setStatus("Starting camera…");
+        const hints = new Map();
+        const formats = [
+          window.ZXing.BarcodeFormat.EAN_13,
+          window.ZXing.BarcodeFormat.EAN_8,
+          window.ZXing.BarcodeFormat.UPC_A,
+          window.ZXing.BarcodeFormat.UPC_E,
+          window.ZXing.BarcodeFormat.CODE_128,
+          window.ZXing.BarcodeFormat.CODE_39,
+        ];
+        hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+        zxingReader = new window.ZXing.BrowserMultiFormatReader(hints);
+        const v = videoRef.current;
+        if (v) v.setAttribute("playsinline", "true");
+        await zxingReader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } } },
+          v,
+          (result) => {
+            if (cancelled || !result) return;
+            const text = (typeof result.getText === "function") ? result.getText() : result.text;
+            if (!text) return;
+            cancelled = true;
+            if (navigator.vibrate) navigator.vibrate(70);
+            try { zxingReader.reset(); } catch {}
+            onDetect(text);
+          }
+        );
+        if (!cancelled) setStatus("Point at a barcode");
+      } catch (err) {
+        if (cancelled) return;
+        const msg = String(err?.message || err || "");
+        if (/permission|notallowed/i.test(msg)) setError("Camera permission denied. Allow camera access in browser settings.");
+        else setError("Couldn't access camera. Check permissions and try again.");
+      }
+    }
+    if (typeof window.BarcodeDetector !== "undefined") startNative();
+    else startZXing();
     return () => {
       cancelled = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (streamRef.current) streamRef.current.getTracks().forEach(tr => tr.stop());
+      if (zxingReader) { try { zxingReader.reset(); } catch {} }
     };
   }, [onDetect]);
 
