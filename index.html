@@ -59,6 +59,8 @@ const API_KEY_KEY = "macro-tracker-api-key";
 const THEME_KEY = "macro-tracker-theme";
 const BODY_KEY = "macro-tracker-body-metrics-v1";
 const BODY_TARGETS_KEY = "macro-tracker-body-targets-v1";
+const BODY_REMINDER_SNOOZE_KEY = "macro-tracker-body-reminder-snoozed-until-v1";
+const BODY_REMINDER_INTERVAL_DAYS = 7;
 const DEFAULT_GOALS = { calories: 1875, protein: 165, carbs: 150, fat: 60 };
 const DEFAULT_BODY_TARGETS = { bodyFat: null, muscleMass: null };
 
@@ -112,9 +114,11 @@ function loadBodyTargets() {
   } catch { return { ...DEFAULT_BODY_TARGETS }; }
 }
 function saveBodyTargets(b) { localStorage.setItem(BODY_TARGETS_KEY, JSON.stringify(b)); }
+function loadBodyReminderSnooze() { return localStorage.getItem(BODY_REMINDER_SNOOZE_KEY) || null; }
+function saveBodyReminderSnooze(iso) { if (iso) localStorage.setItem(BODY_REMINDER_SNOOZE_KEY, iso); else localStorage.removeItem(BODY_REMINDER_SNOOZE_KEY); }
 function sumMacros(entries) { return entries.reduce((a, e) => ({ calories: a.calories+(e.calories||0), protein: a.protein+(e.protein||0), carbs: a.carbs+(e.carbs||0), fat: a.fat+(e.fat||0) }), { calories:0, protein:0, carbs:0, fat:0 }); }
 
-const EXPORT_KEYS = [HISTORY_KEY, FAV_KEY, GOALS_KEY, BODY_KEY, BODY_TARGETS_KEY, THEME_KEY];
+const EXPORT_KEYS = [HISTORY_KEY, FAV_KEY, GOALS_KEY, BODY_KEY, BODY_TARGETS_KEY, THEME_KEY, BODY_REMINDER_SNOOZE_KEY];
 function exportBackup() {
   const data = {};
   for (const k of EXPORT_KEYS) { const v = localStorage.getItem(k); if (v != null) data[k] = v; }
@@ -784,9 +788,9 @@ function DualLineChart({ seriesA, seriesB, t }) {
 }
 
 // ── Trends Panel ─────────────────────────────────────────────────────
-function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSaveBody }) {
+function TrendsPanel({ history, body, goals, bodyTargets, apiKey, initialTab = "macros", onClose, onSaveBody }) {
   const t = useTheme();
-  const [tab, setTab] = useState("macros");
+  const [tab, setTab] = useState(initialTab);
   const [range, setRange] = useState(30);
   const [form, setForm] = useState({ date: today(), weight: "", bodyFat: "", muscleMass: "" });
   const [ingesting, setIngesting] = useState(false);
@@ -1198,6 +1202,39 @@ function BarcodeConfirm({ state, onLog, onCancel, onRetry }) {
   );
 }
 
+// ── Body Reminder Card ───────────────────────────────────────────────
+function BodyReminderCard({ daysSince, onOpen, onDismiss }) {
+  const t = useTheme();
+  const headline = daysSince == null ? "Log your first weigh-in" : "Weekly weigh-in due";
+  const sub = daysSince == null
+    ? "Track weight, body fat, and muscle mass"
+    : daysSince + " day" + (daysSince === 1 ? "" : "s") + " since your last entry";
+  return e("div", { className: "tap", onClick: onOpen, style: {
+    background: "linear-gradient(135deg, " + t.carb + "18, " + t.carb + "08)",
+    border: "1px solid " + t.carb + "44",
+    borderRadius: 16,
+    padding: "11px 14px",
+    marginBottom: 12,
+    display: "flex", alignItems: "center", gap: 12,
+    cursor: "pointer",
+  } },
+    e("div", { style: { width: 34, height: 34, borderRadius: 11, background: t.carb + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+      e("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: t.carb, strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+        e("rect", { x: 3, y: 4, width: 18, height: 18, rx: 2, ry: 2 }),
+        e("line", { x1: 16, y1: 2, x2: 16, y2: 6 }),
+        e("line", { x1: 8, y1: 2, x2: 8, y2: 6 }),
+        e("line", { x1: 3, y1: 10, x2: 21, y2: 10 }),
+        e("path", { d: "M9 15l2 2 4-4" })
+      )
+    ),
+    e("div", { style: { flex: 1, minWidth: 0 } },
+      e("div", { style: { fontSize: 12.5, fontWeight: 600, color: t.text, fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.1 } }, headline),
+      e("div", { style: { fontSize: 10.5, color: t.textDim, marginTop: 2, fontFamily: "'DM Mono', monospace", letterSpacing: 0.3 } }, sub)
+    ),
+    e("button", { onClick: (ev) => { ev.stopPropagation(); onDismiss(); }, title: "Remind me later", style: { background: "none", border: "none", color: t.textFaint, cursor: "pointer", padding: 6, fontSize: 20, lineHeight: 1, flexShrink: 0 } }, "×")
+  );
+}
+
 // ── Main App ─────────────────────────────────────────────────────────
 function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
   const t = useTheme();
@@ -1210,6 +1247,8 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
   const [showFavs, setShowFavs] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showTrends, setShowTrends] = useState(false);
+  const [trendsInitialTab, setTrendsInitialTab] = useState("macros");
+  const [bodyReminderSnooze, setBodyReminderSnooze] = useState(() => loadBodyReminderSnooze());
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1270,7 +1309,38 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
     const ne = [{ ...fav, id: Date.now()+Math.random(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }];
     addEntries(ne); setLastAdded(ne); setShowFavs(false);
   };
-  const saveBodyEntry = (date, entry) => setBody(b => ({ ...b, [date]: { ...(b[date] || {}), ...entry } }));
+  const saveBodyEntry = (date, entry) => {
+    setBody(b => ({ ...b, [date]: { ...(b[date] || {}), ...entry } }));
+    // Saving a weigh-in clears any active snooze so the reminder cadence resets.
+    saveBodyReminderSnooze(null);
+    setBodyReminderSnooze(null);
+  };
+
+  const bodyReminder = useMemo(() => {
+    const now = Date.now();
+    if (bodyReminderSnooze && Date.parse(bodyReminderSnooze) > now) return null;
+    const dates = Object.keys(body).sort();
+    if (dates.length === 0) return { daysSince: null, lastDate: null };
+    const lastDate = dates[dates.length - 1];
+    const lastTs = Date.parse(lastDate + "T00:00:00");
+    const todayTs = Date.parse(todayKey + "T00:00:00");
+    if (!isFinite(lastTs) || !isFinite(todayTs)) return null;
+    const daysSince = Math.max(0, Math.floor((todayTs - lastTs) / 86400000));
+    if (daysSince >= BODY_REMINDER_INTERVAL_DAYS) return { daysSince, lastDate };
+    return null;
+  }, [body, bodyReminderSnooze, todayKey]);
+  const dismissBodyReminder = () => {
+    const until = new Date();
+    until.setHours(0, 0, 0, 0);
+    until.setDate(until.getDate() + 2);
+    const iso = until.toISOString();
+    saveBodyReminderSnooze(iso);
+    setBodyReminderSnooze(iso);
+  };
+  const openBodyLog = () => {
+    setTrendsInitialTab("body");
+    setShowTrends(true);
+  };
 
   const stopListening = useCallback(() => {
     const r = recRef.current;
@@ -1425,7 +1495,7 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
                 e("path", { d: "M3 12a9 9 0 1 0 3-6.7L3 8" }), e("path", { d: "M3 3v5h5" }), e("path", { d: "M12 7v5l3 2" })
               )
             ),
-            e("button", { onClick: () => setShowTrends(true), title: "Trends", className: "tap", style: btnBase },
+            e("button", { onClick: () => { setTrendsInitialTab("macros"); setShowTrends(true); }, title: "Trends", className: "tap", style: btnBase },
               e("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
                 e("path", { d: "M3 17l6-6 4 4 8-8" }), e("path", { d: "M14 7h7v7" })
               )
@@ -1465,6 +1535,13 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
           e(Ring, { value: totals.carbs, max: goals.carbs, color: t.carb, label: "Carbs", unit: "g", mode: "limit" }),
           e(Ring, { value: totals.fat, max: goals.fat, color: t.fat, label: "Fat", unit: "g", mode: "limit" })
         ),
+
+        // ── Weekly body-metrics reminder ──────────────────────────
+        bodyReminder && e(BodyReminderCard, {
+          daysSince: bodyReminder.daysSince,
+          onOpen: openBodyLog,
+          onDismiss: dismissBodyReminder,
+        }),
 
         // ── Primary input: Speak / Type / Scan tiles ──────────────
         e("div", { style: { display: "flex", gap: 10, marginBottom: 8 } },
@@ -1697,7 +1774,7 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
     }),
     showFavs && e(FavoritesPanel, { favs, onClose: () => setShowFavs(false), onLog: logFavorite, onRemove: removeFavorite }),
     showHistory && e(HistoryPanel, { history, goals, todayKey, onClose: () => setShowHistory(false) }),
-    showTrends && e(TrendsPanel, { history, body, goals, bodyTargets, apiKey, onClose: () => setShowTrends(false), onSaveBody: saveBodyEntry }),
+    showTrends && e(TrendsPanel, { history, body, goals, bodyTargets, apiKey, initialTab: trendsInitialTab, onClose: () => setShowTrends(false), onSaveBody: saveBodyEntry }),
     showScanner && e(BarcodeScanner, { onDetect: handleBarcodeDetected, onClose: () => setShowScanner(false) }),
     barcodeState && e(BarcodeConfirm, { state: barcodeState, onLog: logBarcode, onCancel: () => setBarcodeState(null), onRetry: () => { setBarcodeState(null); setShowScanner(true); } })
   );
