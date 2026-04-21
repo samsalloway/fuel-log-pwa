@@ -1,17 +1,9 @@
 [build]
   publish = "."
-  functions = "netlify/functions"
 
 [dev]
   framework = "#static"
   port = 8888
-
-# SPA fallback so /whoop-callback?code=...&state=... lands on index.html
-# and the React app can read the query params.
-[[redirects]]
-  from = "/whoop-callback"
-  to = "/index.html"
-  status = 200
 
 [[headers]]
   for = "/*"

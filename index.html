@@ -62,21 +62,6 @@ const BODY_TARGETS_KEY = "macro-tracker-body-targets-v1";
 const DEFAULT_GOALS = { calories: 1875, protein: 165, carbs: 150, fat: 60 };
 const DEFAULT_BODY_TARGETS = { bodyFat: null, muscleMass: null };
 
-// ── Whoop storage keys ───────────────────────────────────────────────
-const WHOOP_CLIENT_ID_KEY = "macro-tracker-whoop-client-id-v1";
-const WHOOP_TOKENS_KEY = "whoop-tokens-v1";
-const WHOOP_RECOVERY_KEY = "whoop-recovery-v1";
-const WHOOP_SLEEP_KEY = "whoop-sleep-v1";
-const WHOOP_CYCLES_KEY = "whoop-cycles-v1";
-const WHOOP_WORKOUTS_KEY = "whoop-workouts-v1";
-const WHOOP_LAST_SYNC_KEY = "whoop-last-sync-v1";
-const WHOOP_SYNC_LOG_KEY = "whoop-sync-log-v1";
-const WHOOP_PROFILE_KEY = "whoop-profile-v1";
-const WHOOP_SCOPES = "offline read:recovery read:sleep read:cycles read:workout read:profile read:body_measurement";
-const WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
-const WHOOP_OAUTH_STATE_KEY = "whoop_oauth_state";
-const WHOOP_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
 const APP_TZ = "America/New_York";
 function today() { return new Date().toLocaleDateString("en-CA", { timeZone: APP_TZ }); }
 function dateKey(d) { return d.toLocaleDateString("en-CA", { timeZone: APP_TZ }); }
@@ -129,287 +114,7 @@ function loadBodyTargets() {
 function saveBodyTargets(b) { localStorage.setItem(BODY_TARGETS_KEY, JSON.stringify(b)); }
 function sumMacros(entries) { return entries.reduce((a, e) => ({ calories: a.calories+(e.calories||0), protein: a.protein+(e.protein||0), carbs: a.carbs+(e.carbs||0), fat: a.fat+(e.fat||0) }), { calories:0, protein:0, carbs:0, fat:0 }); }
 
-// ── Whoop helpers ────────────────────────────────────────────────────
-function loadWhoopTokens() { try { return JSON.parse(localStorage.getItem(WHOOP_TOKENS_KEY)) || null; } catch { return null; } }
-function saveWhoopTokens(t) { if (t) localStorage.setItem(WHOOP_TOKENS_KEY, JSON.stringify(t)); else localStorage.removeItem(WHOOP_TOKENS_KEY); }
-function loadWhoopClientId() { return localStorage.getItem(WHOOP_CLIENT_ID_KEY) || ""; }
-function saveWhoopClientId(id) { if (id) localStorage.setItem(WHOOP_CLIENT_ID_KEY, id); else localStorage.removeItem(WHOOP_CLIENT_ID_KEY); }
-function loadWhoopRecovery() { try { return JSON.parse(localStorage.getItem(WHOOP_RECOVERY_KEY)) || {}; } catch { return {}; } }
-function loadWhoopSleep() { try { return JSON.parse(localStorage.getItem(WHOOP_SLEEP_KEY)) || {}; } catch { return {}; } }
-function loadWhoopCycles() { try { return JSON.parse(localStorage.getItem(WHOOP_CYCLES_KEY)) || {}; } catch { return {}; } }
-function loadWhoopWorkouts() { try { return JSON.parse(localStorage.getItem(WHOOP_WORKOUTS_KEY)) || {}; } catch { return {}; } }
-function loadWhoopProfile() { try { return JSON.parse(localStorage.getItem(WHOOP_PROFILE_KEY)) || null; } catch { return null; } }
-function loadWhoopLastSync() { return localStorage.getItem(WHOOP_LAST_SYNC_KEY) || null; }
-function loadWhoopSyncLog() { try { return JSON.parse(localStorage.getItem(WHOOP_SYNC_LOG_KEY)) || []; } catch { return []; } }
-function appendWhoopSyncLog(entry) {
-  const log = loadWhoopSyncLog();
-  log.unshift(entry);
-  localStorage.setItem(WHOOP_SYNC_LOG_KEY, JSON.stringify(log.slice(0, 10)));
-}
-function clearWhoopData() {
-  for (const k of [WHOOP_TOKENS_KEY, WHOOP_RECOVERY_KEY, WHOOP_SLEEP_KEY, WHOOP_CYCLES_KEY, WHOOP_WORKOUTS_KEY, WHOOP_LAST_SYNC_KEY, WHOOP_SYNC_LOG_KEY, WHOOP_PROFILE_KEY]) {
-    localStorage.removeItem(k);
-  }
-}
-function whoopRedirectUri() { return window.location.origin + "/whoop-callback"; }
-function randomState(len = 24) {
-  const arr = new Uint8Array(len);
-  window.crypto.getRandomValues(arr);
-  return Array.from(arr, b => b.toString(16).padStart(2, "0")).join("").slice(0, len);
-}
-// Convert an ISO timestamp + Whoop timezone_offset string ("-04:00") to a local calendar date (YYYY-MM-DD).
-function localDateFromOffset(iso, offset) {
-  if (!iso) return null;
-  const ts = Date.parse(iso);
-  if (isNaN(ts)) return null;
-  let offsetMs = 0;
-  if (typeof offset === "string" && /^[+-]\d{2}:?\d{2}$/.test(offset)) {
-    const sign = offset[0] === "-" ? -1 : 1;
-    const clean = offset.replace(":", "");
-    const h = parseInt(clean.slice(1, 3), 10);
-    const m = parseInt(clean.slice(3, 5), 10);
-    offsetMs = sign * (h * 3600 + m * 60) * 1000;
-  } else {
-    // Fallback: browser local offset.
-    const d = new Date(ts);
-    offsetMs = -d.getTimezoneOffset() * 60 * 1000;
-  }
-  const local = new Date(ts + offsetMs);
-  return local.toISOString().slice(0, 10);
-}
-async function whoopTokenExchange(code, redirectUri) {
-  const res = await fetch("/.netlify/functions/whoop-token-exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, redirect_uri: redirectUri }),
-  });
-  if (!res.ok) throw new Error("Token exchange failed: " + res.status);
-  const json = await res.json();
-  return json;
-}
-async function whoopTokenRefresh(refreshToken, scope) {
-  const res = await fetch("/.netlify/functions/whoop-token-refresh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken, scope }),
-  });
-  if (!res.ok) {
-    const err = new Error("Token refresh failed: " + res.status);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
-}
-function normalizeTokenResponse(raw) {
-  if (!raw || !raw.access_token) throw new Error("Invalid token response");
-  const expiresIn = Number(raw.expires_in) || 3600;
-  const expiresAt = new Date(Date.now() + (expiresIn - 60) * 1000).toISOString();
-  return {
-    access_token: raw.access_token,
-    refresh_token: raw.refresh_token,
-    expires_at: expiresAt,
-    scope: raw.scope || WHOOP_SCOPES,
-    token_type: raw.token_type || "bearer",
-  };
-}
-async function ensureFreshWhoopToken(tokens) {
-  if (!tokens) return null;
-  const expiresAt = Date.parse(tokens.expires_at);
-  if (isFinite(expiresAt) && expiresAt > Date.now() + 10000) return tokens;
-  if (!tokens.refresh_token) return null;
-  const raw = await whoopTokenRefresh(tokens.refresh_token, tokens.scope);
-  const next = normalizeTokenResponse(raw);
-  // Whoop sometimes returns a rotated refresh_token; keep latest.
-  if (!next.refresh_token) next.refresh_token = tokens.refresh_token;
-  saveWhoopTokens(next);
-  return next;
-}
-// Call Whoop API via the Netlify proxy. Handles one refresh + retry on 401.
-async function whoopFetch(path, params = {}) {
-  let tokens = loadWhoopTokens();
-  if (!tokens) throw new Error("not_connected");
-  try { tokens = await ensureFreshWhoopToken(tokens); }
-  catch (err) {
-    if (err.status === 401) { saveWhoopTokens(null); throw new Error("reconnect_required"); }
-    throw err;
-  }
-  if (!tokens) throw new Error("reconnect_required");
-  const qs = new URLSearchParams({ path });
-  for (const [k, v] of Object.entries(params)) { if (v != null) qs.set(k, String(v)); }
-  const url = "/.netlify/functions/whoop-fetch?" + qs.toString();
-  const doFetch = (t) => fetch(url, { headers: { Authorization: "Bearer " + t.access_token } });
-  let res = await doFetch(tokens);
-  if (res.status === 401) {
-    // Try one forced refresh.
-    try {
-      if (!tokens.refresh_token) throw new Error("no_refresh");
-      const raw = await whoopTokenRefresh(tokens.refresh_token, tokens.scope);
-      const next = normalizeTokenResponse(raw);
-      if (!next.refresh_token) next.refresh_token = tokens.refresh_token;
-      saveWhoopTokens(next);
-      res = await doFetch(next);
-    } catch {
-      saveWhoopTokens(null);
-      throw new Error("reconnect_required");
-    }
-  }
-  if (res.status === 429) {
-    const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
-    const err = new Error("rate_limited");
-    err.rateLimited = true;
-    err.retryAfter = retryAfter;
-    throw err;
-  }
-  if (!res.ok) throw new Error("whoop_error_" + res.status);
-  return res.json();
-}
-// Generic paginator; returns flattened records.
-async function whoopPaginate(path, baseParams, { maxPages = 20 } = {}) {
-  const out = [];
-  let nextToken = undefined;
-  let page = 0;
-  while (page < maxPages) {
-    const params = { ...baseParams, limit: 25 };
-    if (nextToken) params.nextToken = nextToken;
-    const data = await whoopFetch(path, params);
-    if (Array.isArray(data?.records)) out.push(...data.records);
-    nextToken = data?.next_token;
-    if (!nextToken) break;
-    page++;
-  }
-  return out;
-}
-// Map a Whoop record to our stored shape, keyed by wake-day.
-function mapRecovery(r, cyclesById) {
-  const cycle = r?.cycle_id ? cyclesById?.get(r.cycle_id) : null;
-  const dateFrom = cycle?.start || r?.created_at;
-  const offset = cycle?.timezone_offset;
-  const date = localDateFromOffset(dateFrom, offset);
-  const s = r?.score || {};
-  return date ? { date, value: {
-    recovery_score: s.recovery_score ?? null,
-    hrv_rmssd_milli: s.hrv_rmssd_milli ?? null,
-    resting_heart_rate: s.resting_heart_rate ?? null,
-    spo2_percentage: s.spo2_percentage ?? null,
-    skin_temp_celsius: s.skin_temp_celsius ?? null,
-    cycle_id: r.cycle_id ?? null,
-    sleep_id: r.sleep_id ?? null,
-    raw: r,
-  } } : null;
-}
-function mapSleep(r) {
-  if (r?.nap) return null;
-  const date = localDateFromOffset(r?.end, r?.timezone_offset);
-  const s = r?.score || {}; const ss = s.stage_summary || {};
-  const rem = ss.total_rem_sleep_time_milli || 0;
-  const deep = ss.total_slow_wave_sleep_time_milli || 0;
-  const light = ss.total_light_sleep_time_milli || 0;
-  return date ? { date, value: {
-    total_sleep_time: rem + deep + light,
-    sleep_efficiency: s.sleep_efficiency_percentage ?? null,
-    sleep_performance: s.sleep_performance_percentage ?? null,
-    sleep_consistency: s.sleep_consistency_percentage ?? null,
-    rem_sleep: rem,
-    deep_sleep: deep,
-    light_sleep: light,
-    total_in_bed: ss.total_in_bed_time_milli ?? null,
-    awake: ss.total_awake_time_milli ?? null,
-    disturbances: ss.disturbance_count ?? null,
-    respiratory_rate: s.respiratory_rate ?? null,
-    start: r.start, end: r.end, timezone_offset: r.timezone_offset,
-    raw: r,
-  } } : null;
-}
-function mapCycle(r) {
-  const date = localDateFromOffset(r?.start, r?.timezone_offset);
-  const s = r?.score || {};
-  return date ? { date, value: {
-    day_strain: s.strain ?? null,
-    kilojoule: s.kilojoule ?? null,
-    average_heart_rate: s.average_heart_rate ?? null,
-    max_heart_rate: s.max_heart_rate ?? null,
-    cycle_id: r.id,
-    start: r.start, end: r.end, timezone_offset: r.timezone_offset,
-    raw: r,
-  } } : null;
-}
-function mapWorkout(r) {
-  const date = localDateFromOffset(r?.start, r?.timezone_offset);
-  const s = r?.score || {}; const zd = s.zone_durations || {};
-  return date ? { date, value: {
-    id: r.id,
-    sport_id: r.sport_id ?? null,
-    sport_name: r.sport_name || null,
-    start: r.start, end: r.end, timezone_offset: r.timezone_offset,
-    strain: s.strain ?? null,
-    kilojoule: s.kilojoule ?? null,
-    average_heart_rate: s.average_heart_rate ?? null,
-    max_heart_rate: s.max_heart_rate ?? null,
-    zone_duration_zero: zd.zone_zero_milli ?? null,
-    zone_duration_one: zd.zone_one_milli ?? null,
-    zone_duration_two: zd.zone_two_milli ?? null,
-    zone_duration_three: zd.zone_three_milli ?? null,
-    zone_duration_four: zd.zone_four_milli ?? null,
-    zone_duration_five: zd.zone_five_milli ?? null,
-    raw: r,
-  } } : null;
-}
-async function syncWhoop({ backfillDays = 2 } = {}) {
-  const startedAt = new Date();
-  const end = new Date();
-  const start = new Date(end.getTime() - backfillDays * 86400000);
-  const params = { start: start.toISOString(), end: end.toISOString() };
-  const counts = { recovery: 0, sleep: 0, cycles: 0, workouts: 0 };
-  let profileFetched = false;
-  try {
-    // Profile (cheap, nice to cache for "Connected as Sam")
-    if (!loadWhoopProfile()) {
-      try {
-        const prof = await whoopFetch("/v2/user/profile/basic", {});
-        if (prof) { localStorage.setItem(WHOOP_PROFILE_KEY, JSON.stringify(prof)); profileFetched = true; }
-      } catch {}
-    }
-    // Fetch cycles first so recovery can join for correct date key.
-    const cycles = await whoopPaginate("/v2/cycle", params);
-    const cyclesById = new Map(cycles.map(c => [c.id, c]));
-    const cyclesStore = loadWhoopCycles();
-    for (const c of cycles) { const m = mapCycle(c); if (m) { cyclesStore[m.date] = m.value; counts.cycles++; } }
-    localStorage.setItem(WHOOP_CYCLES_KEY, JSON.stringify(cyclesStore));
-    // Recovery
-    const recovery = await whoopPaginate("/v2/recovery", params);
-    const recoveryStore = loadWhoopRecovery();
-    for (const r of recovery) { const m = mapRecovery(r, cyclesById); if (m) { recoveryStore[m.date] = m.value; counts.recovery++; } }
-    localStorage.setItem(WHOOP_RECOVERY_KEY, JSON.stringify(recoveryStore));
-    // Sleep
-    const sleep = await whoopPaginate("/v2/activity/sleep", params);
-    const sleepStore = loadWhoopSleep();
-    for (const s of sleep) { const m = mapSleep(s); if (m) { sleepStore[m.date] = m.value; counts.sleep++; } }
-    localStorage.setItem(WHOOP_SLEEP_KEY, JSON.stringify(sleepStore));
-    // Workouts — multiple per day; dedup by id
-    const workouts = await whoopPaginate("/v2/activity/workout", params);
-    const workoutsStore = loadWhoopWorkouts();
-    for (const w of workouts) {
-      const m = mapWorkout(w); if (!m) continue;
-      const arr = workoutsStore[m.date] || [];
-      const idx = arr.findIndex(x => x.id === m.value.id);
-      if (idx >= 0) arr[idx] = m.value; else arr.push(m.value);
-      arr.sort((a, b) => (a.start || "").localeCompare(b.start || ""));
-      workoutsStore[m.date] = arr;
-      counts.workouts++;
-    }
-    localStorage.setItem(WHOOP_WORKOUTS_KEY, JSON.stringify(workoutsStore));
-
-    const finishedAt = new Date().toISOString();
-    localStorage.setItem(WHOOP_LAST_SYNC_KEY, finishedAt);
-    appendWhoopSyncLog({ ts: finishedAt, status: "success", counts, backfillDays });
-    return { ok: true, counts, profileFetched };
-  } catch (err) {
-    appendWhoopSyncLog({ ts: new Date().toISOString(), status: "error", error: String(err?.message || err), backfillDays });
-    throw err;
-  }
-}
-
-const EXPORT_KEYS = [HISTORY_KEY, FAV_KEY, GOALS_KEY, BODY_KEY, BODY_TARGETS_KEY, THEME_KEY, WHOOP_RECOVERY_KEY, WHOOP_SLEEP_KEY, WHOOP_CYCLES_KEY, WHOOP_WORKOUTS_KEY, WHOOP_LAST_SYNC_KEY, WHOOP_PROFILE_KEY, WHOOP_CLIENT_ID_KEY];
+const EXPORT_KEYS = [HISTORY_KEY, FAV_KEY, GOALS_KEY, BODY_KEY, BODY_TARGETS_KEY, THEME_KEY];
 function exportBackup() {
   const data = {};
   for (const k of EXPORT_KEYS) { const v = localStorage.getItem(k); if (v != null) data[k] = v; }
@@ -682,7 +387,7 @@ function Ring({ value, max, color, label, unit, mode = "limit" }) {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────
-function SettingsPanel({ goals, themeMode, setThemeMode, bodyTargets, setBodyTargets, onSave, onClose, onClearKey, whoopConnected, whoopProfile, whoopClientId, setWhoopClientId, onConnectWhoop, onDisconnectWhoop, onRebackfillWhoop, whoopSyncing }) {
+function SettingsPanel({ goals, themeMode, setThemeMode, bodyTargets, setBodyTargets, onSave, onClose, onClearKey }) {
   const t = useTheme();
   const [draft, setDraft] = useState({ ...goals });
   const [bodyDraft, setBodyDraft] = useState(() => ({
@@ -691,21 +396,12 @@ function SettingsPanel({ goals, themeMode, setThemeMode, bodyTargets, setBodyTar
   }));
   const [bodyTargetSaved, setBodyTargetSaved] = useState(false);
   const [importStatus, setImportStatus] = useState("");
-  const [clientIdDraft, setClientIdDraft] = useState(whoopClientId || "");
-  const [clientIdSaved, setClientIdSaved] = useState(false);
   const importRef = useRef(null);
   function saveBodyTargetDrafts() {
     const parse = (s) => { const n = parseFloat(s); return (isFinite(n) && n > 0) ? n : null; };
     setBodyTargets({ bodyFat: parse(bodyDraft.bodyFat), muscleMass: parse(bodyDraft.muscleMass) });
     setBodyTargetSaved(true);
     setTimeout(() => setBodyTargetSaved(false), 1500);
-  }
-  function saveClientId() {
-    const v = clientIdDraft.trim();
-    saveWhoopClientId(v);
-    setWhoopClientId(v);
-    setClientIdSaved(true);
-    setTimeout(() => setClientIdSaved(false), 1600);
   }
   const fields = [
     { key: "calories", label: "Calories", unit: "kcal", color: t.cal, step: 100 },
@@ -783,39 +479,6 @@ function SettingsPanel({ goals, themeMode, setThemeMode, bodyTargets, setBodyTar
         ))
       ),
       e("button", { onClick: saveBodyTargetDrafts, style: { width: "100%", padding: 12, background: t.accent, border: "none", borderRadius: 12, color: t.onAccent, fontWeight: 600, fontSize: 13, letterSpacing: 0.3, cursor: "pointer", boxShadow: "0 4px 14px "+t.shadow, fontFamily: "'DM Sans', sans-serif" } }, bodyTargetSaved ? "Saved ✓" : "Save Body Targets"),
-
-      // ── Integrations ────────────────────────────────────────
-      e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.6, textTransform: "uppercase", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginTop: 24, marginBottom: 10 } }, "Integrations"),
-      e("div", { style: { background: t.surface, border: "1px solid "+t.border, borderRadius: 14, padding: "14px 16px" } },
-        e("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10 } },
-          e("div", { style: { width: 28, height: 28, borderRadius: 8, background: "#161212", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, fontFamily: "'DM Sans', sans-serif" } }, "W"),
-          e("div", { style: { flex: 1 } },
-            e("div", { style: { fontSize: 14, fontWeight: 600, color: t.text, fontFamily: "'DM Sans', sans-serif" } }, "Whoop"),
-            e("div", { style: { fontSize: 10, color: t.textMuted, fontFamily: "'DM Mono', monospace", letterSpacing: 0.4 } },
-              whoopConnected
-                ? (whoopProfile?.first_name ? "Connected as " + whoopProfile.first_name : "Connected")
-                : "Recovery, sleep, strain, workouts"
-            )
-          )
-        ),
-        e("p", { style: { fontSize: 11, color: t.textMuted, lineHeight: 1.55, marginBottom: 10, fontFamily: "'DM Sans', sans-serif" } }, whoopConnected
-          ? "Whoop data syncs in the background every 6 hours. You can re-pull the last 60 days any time."
-          : "Register an app at developer.whoop.com, set the redirect URI to this site's /whoop-callback, and paste the Client ID below."
-        ),
-        !whoopConnected && e("div", { style: { marginBottom: 10 } },
-          e("div", { style: { fontSize: 10, color: t.textDim, marginBottom: 4, letterSpacing: 0.4 } }, "Whoop Client ID"),
-          e("div", { style: { display: "flex", gap: 6 } },
-            e("input", { type: "text", value: clientIdDraft, onChange: (ev) => setClientIdDraft(ev.target.value), placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", style: { flex: 1, minWidth: 0, padding: "9px 11px", background: t.inputBg, border: "1px solid "+t.border, borderRadius: 10, color: t.text, fontSize: 12, fontFamily: "'DM Mono', monospace", outline: "none" } }),
-            e("button", { onClick: saveClientId, disabled: !clientIdDraft.trim(), style: { padding: "9px 14px", background: clientIdDraft.trim() ? t.accent : t.surface, border: "none", borderRadius: 10, color: clientIdDraft.trim() ? t.onAccent : t.textMuted, fontSize: 11, fontWeight: 600, cursor: clientIdDraft.trim() ? "pointer" : "default", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, clientIdSaved ? "Saved" : "Save")
-          )
-        ),
-        whoopConnected
-          ? e("div", { style: { display: "flex", gap: 8 } },
-              e("button", { onClick: onRebackfillWhoop, disabled: whoopSyncing, style: { flex: 1, padding: "11px 14px", background: t.surface, border: "1px solid "+t.border, borderRadius: 12, color: t.text, fontSize: 12, fontWeight: 600, cursor: whoopSyncing ? "wait" : "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, whoopSyncing ? "Syncing…" : "Re-backfill 60d"),
-              e("button", { onClick: onDisconnectWhoop, style: { flex: 1, padding: "11px 14px", background: "none", border: "1px solid "+t.danger+"33", borderRadius: 12, color: t.danger, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, "Disconnect")
-            )
-          : e("button", { onClick: onConnectWhoop, disabled: !whoopClientId, style: { width: "100%", padding: "12px 14px", background: whoopClientId ? t.accent : t.surface, border: "none", borderRadius: 12, color: whoopClientId ? t.onAccent : t.textMuted, fontSize: 13, fontWeight: 600, cursor: whoopClientId ? "pointer" : "default", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3, boxShadow: whoopClientId ? "0 4px 14px "+t.shadow : "none" } }, whoopClientId ? "Connect Whoop" : "Enter Client ID first")
-      ),
 
       e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.6, textTransform: "uppercase", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, marginTop: 24, marginBottom: 10 } }, "Data"),
       e("p", { style: { fontSize: 11, color: t.textMuted, lineHeight: 1.55, marginBottom: 12, fontFamily: "'DM Sans', sans-serif" } }, "Your logs, favorites, goals, and weigh-ins live in this browser. Back up regularly so nothing is lost if the browser cache clears."),
@@ -1121,7 +784,7 @@ function DualLineChart({ seriesA, seriesB, t }) {
 }
 
 // ── Trends Panel ─────────────────────────────────────────────────────
-function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSaveBody, whoopRecovery, whoopSleep, whoopCycles, whoopConnected }) {
+function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSaveBody }) {
   const t = useTheme();
   const [tab, setTab] = useState("macros");
   const [range, setRange] = useState(30);
@@ -1205,7 +868,7 @@ function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSav
       ),
 
       e("div", { style: { display: "flex", gap: 4, background: t.surface, border: "1px solid "+t.border, borderRadius: 12, padding: 4, marginBottom: 12 } },
-        [{ v: "macros", label: "Macros" }, { v: "body", label: "Body" }, { v: "whoop", label: "Whoop" }].map(o =>
+        [{ v: "macros", label: "Macros" }, { v: "body", label: "Body" }].map(o =>
           e("button", { key: o.v, onClick: () => setTab(o.v), style: { flex: 1, padding: "10px 0", background: tab === o.v ? t.surfaceElevated : "transparent", border: "none", borderRadius: 9, color: tab === o.v ? t.text : t.textDim, fontSize: 13, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", letterSpacing: 0.3, transition: "all 0.2s ease" } }, o.label)
         )
       ),
@@ -1217,9 +880,7 @@ function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSav
       ),
 
       e("div", { style: { overflowY: "auto", overflowX: "hidden", flex: 1, WebkitOverflowScrolling: "touch", display: "flex", flexDirection: "column", gap: 12, padding: "0 2px" } },
-        tab === "whoop"
-          ? e(WhoopTrendsTab, { range, connected: whoopConnected, recovery: whoopRecovery || {}, sleep: whoopSleep || {}, cycles: whoopCycles || {}, t })
-          : tab === "macros"
+        tab === "macros"
           ? macroDefs.map(m => {
               const s = seriesStats(macroSeries[m.key]);
               return e("div", { key: m.key, style: { background: t.surface, border: "1px solid "+t.border, borderRadius: 16, padding: "14px 14px 10px" } },
@@ -1327,53 +988,6 @@ function TrendsPanel({ history, body, goals, bodyTargets, apiKey, onClose, onSav
       )
     )
   );
-}
-
-function WhoopTrendsTab({ range, connected, recovery, sleep, cycles, t }) {
-  if (!connected) {
-    return e("div", { style: { padding: "40px 24px", textAlign: "center", fontSize: 12, color: t.textDim, lineHeight: 1.6 } }, "Connect Whoop in Settings → Integrations to see recovery, sleep, and strain trends here.");
-  }
-  const recoverySeries = buildWhoopSeries(recovery, range, "recovery_score");
-  const hrvSeries = buildWhoopSeries(recovery, range, "hrv_rmssd_milli");
-  const rhrSeries = buildWhoopSeries(recovery, range, "resting_heart_rate");
-  const strainSeries = buildWhoopSeries(cycles, range, "day_strain");
-  const sleepSeries = buildWhoopSeries(sleep, range, "total_sleep_time").map(p => ({ ...p, value: p.value != null ? p.value / 3600000 : null }));
-  const metrics = [
-    { key: "recovery", label: "Recovery", unit: "%", color: t.pro, series: recoverySeries, fmt: (v) => Math.round(v) + "%" },
-    { key: "hrv", label: "HRV", unit: "ms", color: t.accent, series: hrvSeries, fmt: (v) => Math.round(v) + "ms" },
-    { key: "rhr", label: "Resting HR", unit: "bpm", color: t.fat, series: rhrSeries, fmt: (v) => Math.round(v) + "bpm" },
-    { key: "strain", label: "Day Strain", unit: "", color: t.carb, series: strainSeries, fmt: (v) => v.toFixed(1) },
-    { key: "sleep", label: "Sleep", unit: "h", color: t.pro, series: sleepSeries, fmt: (v) => v.toFixed(1) + "h" },
-  ];
-  return metrics.map((m) => {
-    const s = seriesStats(m.series);
-    return e("div", { key: m.key, style: { background: t.surface, border: "1px solid "+t.border, borderRadius: 16, padding: "14px 14px 10px" } },
-      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
-        e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
-          e("div", { style: { width: 8, height: 8, borderRadius: "50%", background: m.color } }),
-          e("div", { style: { fontSize: 13, fontWeight: 600, color: t.text, letterSpacing: 0.2 } }, m.label)
-        ),
-        e("div", { style: { fontSize: 10, color: t.textMuted, fontFamily: "'DM Mono', monospace", letterSpacing: 0.4 } },
-          s.count > 0 ? ("latest " + m.fmt(s.last)) : "—"
-        )
-      ),
-      e(LineChart, { series: m.series, goal: null, color: m.color, label: m.label, unit: m.unit, t })
-    );
-  });
-}
-
-function buildWhoopSeries(store, days, key) {
-  const end = new Date();
-  const out = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(end);
-    d.setDate(end.getDate() - i);
-    const dk = dateKey(d);
-    const rec = store[dk];
-    const v = rec?.[key];
-    out.push({ date: dk, value: (typeof v === "number" && isFinite(v)) ? v : null });
-  }
-  return out;
 }
 
 // ── Barcode Scanner ──────────────────────────────────────────────────
@@ -1584,216 +1198,8 @@ function BarcodeConfirm({ state, onLog, onCancel, onRetry }) {
   );
 }
 
-// ── Whoop formatters + cards ─────────────────────────────────────────
-function formatDurationMs(ms) {
-  if (ms == null || !isFinite(ms) || ms < 0) return "—";
-  const total = Math.round(ms / 60000);
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  if (h === 0) return m + "m";
-  return h + "h " + String(m).padStart(2, "0") + "m";
-}
-function formatRelativeSync(iso) {
-  if (!iso) return null;
-  const ts = Date.parse(iso);
-  if (!isFinite(ts)) return null;
-  const diff = Date.now() - ts;
-  if (diff < 60000) return "just now";
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return mins + "m ago";
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return hours + "h ago";
-  const days = Math.floor(hours / 24);
-  return days + "d ago";
-}
-function recoveryColor(score, t) {
-  if (score == null) return t.textMuted;
-  if (score < 34) return t.danger;
-  if (score < 67) return t.carb;
-  return t.pro;
-}
-
-function RecoveryCard({ date, isToday, connected, syncing, syncError, lastSync, recovery, sleep, cycle, onSync, onConnect, onReconnect }) {
-  const t = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const reconnectNeeded = syncError === "Reconnect Whoop";
-
-  // NOT CONNECTED state
-  if (!connected) {
-    return e("div", { className: "tap", onClick: onConnect, style: {
-      background: "none", border: "1px dashed "+t.border, borderRadius: 16,
-      padding: "14px 16px", marginBottom: 14, cursor: "pointer",
-      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-    } },
-      e("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
-        e("div", { style: { width: 26, height: 26, borderRadius: 7, background: "#161212", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, fontFamily: "'DM Sans', sans-serif" } }, "W"),
-        e("div", null,
-          e("div", { style: { fontSize: 12, color: t.text, fontWeight: 600 } }, "Connect Whoop"),
-          e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 0.3, marginTop: 2 } }, "Recovery · Sleep · Strain · Workouts")
-        )
-      ),
-      e("span", { style: { fontSize: 16, color: t.textDim, lineHeight: 1 } }, "›")
-    );
-  }
-
-  const score = recovery?.recovery_score;
-  const color = recoveryColor(score, t);
-  const hrv = recovery?.hrv_rmssd_milli;
-  const rhr = recovery?.resting_heart_rate;
-  const sleepMs = sleep?.total_sleep_time;
-  const strain = cycle?.day_strain;
-  const syncedLabel = syncing ? "syncing…" : (reconnectNeeded ? "reconnect needed" : (formatRelativeSync(lastSync) ? "synced " + formatRelativeSync(lastSync) : "never synced"));
-
-  const hasAny = score != null || hrv != null || rhr != null || sleepMs != null || strain != null;
-
-  // RECONNECT state
-  if (reconnectNeeded) {
-    return e("div", { style: { background: t.surface, border: "1px solid "+t.danger+"33", borderRadius: 16, padding: "14px 16px", marginBottom: 14 } },
-      e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-        e("div", { style: { fontSize: 10, color: t.danger, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 600, fontFamily: "'DM Sans', sans-serif" } }, "Whoop · Reconnect"),
-        e("button", { onClick: onReconnect, className: "tap", style: { padding: "8px 14px", background: t.danger+"22", border: "1px solid "+t.danger+"44", borderRadius: 10, color: t.danger, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.4 } }, "Reconnect")
-      ),
-      e("div", { style: { fontSize: 12, color: t.textDim, lineHeight: 1.5 } }, "Your Whoop session has expired. Reconnect to resume syncing.")
-    );
-  }
-
-  return e("div", { style: { background: t.surface, border: "1px solid "+t.border, borderRadius: 18, padding: "14px 16px", marginBottom: 14 } },
-    // Header row
-    e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hasAny ? 12 : 6 } },
-      e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
-        e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 600, fontFamily: "'DM Sans', sans-serif" } }, "Recovery"),
-        e("div", { style: { fontSize: 9, color: t.textFaint, fontFamily: "'DM Mono', monospace", letterSpacing: 0.4 } }, syncedLabel)
-      ),
-      e("button", { onClick: onSync, disabled: syncing, className: "tap", title: "Sync Whoop", style: { width: 32, height: 32, borderRadius: 10, background: t.surfaceElevated, border: "1px solid "+t.border, color: t.textDim, cursor: syncing ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 } },
-        syncing
-          ? e("div", { style: { width: 14, height: 14, border: "2px solid "+t.border, borderTopColor: t.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite" } })
-          : e("svg", { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
-              e("path", { d: "M23 4v6h-6" }), e("path", { d: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10" })
-            )
-      )
-    ),
-
-    // Empty state (connected but no data for this day)
-    !hasAny && e("div", { style: { textAlign: "center", fontSize: 12, color: t.textMuted, padding: "14px 8px 4px", lineHeight: 1.55 } },
-      isToday ? "No Whoop data yet today — sync, or check you wore your strap." : "No Whoop data for this day."
-    ),
-
-    // Main row
-    hasAny && e("div", { onClick: () => setExpanded(x => !x), style: { display: "flex", alignItems: "center", gap: 18, cursor: "pointer" } },
-      e("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", minWidth: 76 } },
-        e("div", { style: { fontSize: 38, fontWeight: 600, color: color, fontFamily: "'Playfair Display', serif", lineHeight: 1 } }, score != null ? Math.round(score) : "—"),
-        e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 1.4, textTransform: "uppercase", marginTop: 4, fontFamily: "'DM Sans', sans-serif", fontWeight: 600 } }, "SCORE")
-      ),
-      e("div", { style: { flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px" } },
-        e("div", null,
-          e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 600 } }, "HRV"),
-          e("div", { style: { fontSize: 14, color: t.text, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontFamily: "'DM Sans', sans-serif" } }, hrv != null ? Math.round(hrv) + "ms" : "—")
-        ),
-        e("div", null,
-          e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 600 } }, "RHR"),
-          e("div", { style: { fontSize: 14, color: t.text, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontFamily: "'DM Sans', sans-serif" } }, rhr != null ? Math.round(rhr) + "bpm" : "—")
-        ),
-        e("div", null,
-          e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 600 } }, "Sleep"),
-          e("div", { style: { fontSize: 14, color: t.text, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontFamily: "'DM Sans', sans-serif" } }, sleepMs != null ? formatDurationMs(sleepMs) : "—")
-        ),
-        e("div", null,
-          e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 600 } }, "Strain"),
-          e("div", { style: { fontSize: 14, color: t.text, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontFamily: "'DM Sans', sans-serif" } }, strain != null ? strain.toFixed(1) : "—")
-        )
-      )
-    ),
-
-    // Expanded details
-    hasAny && expanded && sleep && e("div", { className: "soft-fade", style: { marginTop: 14, paddingTop: 14, borderTop: "1px solid "+t.border } },
-      e("div", { style: { fontSize: 9, color: t.textMuted, letterSpacing: 1.4, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 } }, "Sleep Stages"),
-      e(SleepStageBar, { sleep }),
-      e("div", { style: { display: "flex", gap: 12, marginTop: 10, fontSize: 10, color: t.textDim, fontFamily: "'DM Mono', monospace", letterSpacing: 0.3 } },
-        e("span", null, "REM " + formatDurationMs(sleep.rem_sleep)),
-        e("span", null, "Deep " + formatDurationMs(sleep.deep_sleep)),
-        e("span", null, "Light " + formatDurationMs(sleep.light_sleep)),
-        sleep.disturbances != null && e("span", null, sleep.disturbances + " disturbances")
-      )
-    ),
-
-    // Sync error
-    syncError && !reconnectNeeded && e("div", { style: { marginTop: 10, fontSize: 10, color: t.danger, fontFamily: "'DM Mono', monospace", letterSpacing: 0.3 } }, syncError)
-  );
-}
-
-function SleepStageBar({ sleep }) {
-  const t = useTheme();
-  const rem = sleep.rem_sleep || 0;
-  const deep = sleep.deep_sleep || 0;
-  const light = sleep.light_sleep || 0;
-  const awake = sleep.awake || 0;
-  const total = rem + deep + light + awake;
-  if (total === 0) return e("div", { style: { fontSize: 10, color: t.textMuted } }, "No stage data");
-  const pct = (x) => (x / total) * 100;
-  return e("div", { style: { display: "flex", width: "100%", height: 10, borderRadius: 5, overflow: "hidden", background: t.surfaceElevated } },
-    e("div", { style: { width: pct(deep) + "%", background: t.pro } }),
-    e("div", { style: { width: pct(rem) + "%", background: t.accent } }),
-    e("div", { style: { width: pct(light) + "%", background: t.carb } }),
-    e("div", { style: { width: pct(awake) + "%", background: t.textMuted, opacity: 0.6 } })
-  );
-}
-
-const WHOOP_SPORT_NAMES = {
-  "-1": "Activity", 0: "Running", 1: "Cycling", 16: "Baseball", 17: "Basketball", 18: "Rowing",
-  19: "Fencing", 20: "Field Hockey", 21: "Football", 22: "Golf", 24: "Ice Hockey",
-  25: "Lacrosse", 27: "Rugby", 28: "Sailing", 29: "Skiing", 30: "Soccer", 31: "Softball",
-  32: "Squash", 33: "Swimming", 34: "Tennis", 35: "Track & Field", 36: "Volleyball",
-  37: "Water Polo", 38: "Wrestling", 39: "Boxing", 42: "Dance", 43: "Pilates",
-  44: "Yoga", 45: "Weightlifting", 47: "Cross Country Skiing", 48: "Functional Fitness",
-  49: "Duathlon", 51: "Gymnastics", 52: "Hiking/Rucking", 53: "Horseback Riding",
-  55: "Kayaking", 56: "Martial Arts", 57: "Mountain Biking", 59: "Powerlifting",
-  60: "Rock Climbing", 61: "Paddleboarding", 62: "Triathlon", 63: "Walking",
-  64: "Surfing", 65: "Elliptical", 66: "Stairmaster", 70: "Meditation", 71: "Other",
-  73: "Diving", 74: "Operations - Tactical", 75: "Operations - Medical",
-  82: "HIIT", 83: "Spin", 84: "Jiu Jitsu", 85: "Manual Labor", 86: "Cricket",
-  87: "Pickleball", 88: "Inline Skating", 89: "Box Fitness", 90: "Spikeball",
-  91: "Wheelchair Pushing", 92: "Paddle Tennis", 93: "Barre", 94: "Stage Performance",
-  95: "High Stress Work", 96: "Parkour", 97: "Gaelic Football", 98: "Hurling/Camogie",
-  99: "Obstacle Course Racing", 100: "Motocross", 101: "Caddying", 102: "Ice Bath",
-  103: "Commuting", 104: "Gaming", 105: "Snowboarding", 106: "Motorsports", 107: "F45 Training",
-  108: "Padel", 109: "Barry's", 110: "Dedicated Parenting", 111: "Stroller Walking",
-  112: "Stroller Jogging", 113: "Toddlerwearing", 114: "Babywearing", 115: "Barre3",
-  116: "Hot Yoga", 117: "Stadium Steps", 118: "Polo", 119: "Musical Performance",
-  120: "Kite Boarding", 121: "Dog Walking", 122: "Water Skiing", 123: "Wakeboarding",
-  124: "Cooking", 125: "Cleaning", 126: "Public Speaking",
-};
-function workoutSportLabel(w) {
-  if (w.sport_name) return w.sport_name;
-  if (w.sport_id != null) return WHOOP_SPORT_NAMES[w.sport_id] || "Activity";
-  return "Activity";
-}
-function WorkoutsCard({ workouts }) {
-  const t = useTheme();
-  return e("div", { style: { background: t.surface, border: "1px solid "+t.border, borderRadius: 18, padding: "12px 14px", marginBottom: 14 } },
-    e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 600, fontFamily: "'DM Sans', sans-serif", marginBottom: 10 } }, "Workouts"),
-    e("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
-      workouts.map((w) => {
-        const durationMs = (w.start && w.end) ? (Date.parse(w.end) - Date.parse(w.start)) : null;
-        return e("div", { key: w.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", background: t.surfaceElevated, border: "1px solid "+t.border, borderRadius: 12 } },
-          e("div", { style: { flex: 1, minWidth: 0 } },
-            e("div", { style: { fontSize: 13, fontWeight: 600, color: t.text, fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, workoutSportLabel(w)),
-            e("div", { style: { fontSize: 10, color: t.textMuted, fontFamily: "'DM Mono', monospace", letterSpacing: 0.3, marginTop: 2 } },
-              (durationMs ? formatDurationMs(durationMs) : "—") +
-              (w.average_heart_rate != null ? "  ·  " + Math.round(w.average_heart_rate) + "/" + Math.round(w.max_heart_rate || 0) + " bpm" : "")
-            )
-          ),
-          e("div", { style: { textAlign: "right", fontFamily: "'DM Sans', sans-serif", fontVariantNumeric: "tabular-nums" } },
-            e("div", { style: { fontSize: 14, fontWeight: 600, color: t.accent } }, w.strain != null ? w.strain.toFixed(1) : "—"),
-            e("div", { style: { fontSize: 8, color: t.textMuted, letterSpacing: 1, textTransform: "uppercase", fontWeight: 600 } }, "strain")
-          )
-        );
-      })
-    )
-  );
-}
-
 // ── Main App ─────────────────────────────────────────────────────────
-function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult, clearOauthResult, showBackfillPrompt, closeBackfillPrompt }) {
+function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
   const t = useTheme();
   const [history, setHistory] = useState(() => loadHistory());
   const [favs, setFavs] = useState(() => loadFavs());
@@ -1822,82 +1228,6 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
   const [moveTargetDate, setMoveTargetDate] = useState("");
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeState, setBarcodeState] = useState(null);
-  // Whoop state
-  const [whoopTokens, setWhoopTokens] = useState(() => loadWhoopTokens());
-  const [whoopProfile, setWhoopProfile] = useState(() => loadWhoopProfile());
-  const [whoopRecovery, setWhoopRecovery] = useState(() => loadWhoopRecovery());
-  const [whoopSleep, setWhoopSleep] = useState(() => loadWhoopSleep());
-  const [whoopCycles, setWhoopCycles] = useState(() => loadWhoopCycles());
-  const [whoopWorkouts, setWhoopWorkouts] = useState(() => loadWhoopWorkouts());
-  const [whoopLastSync, setWhoopLastSync] = useState(() => loadWhoopLastSync());
-  const [whoopSyncing, setWhoopSyncing] = useState(false);
-  const [whoopSyncError, setWhoopSyncError] = useState("");
-  const [whoopClientId, setWhoopClientId] = useState(() => loadWhoopClientId());
-  const autoSyncedRef = useRef(false);
-
-  const whoopConnected = !!whoopTokens?.access_token;
-  const refreshWhoopState = useCallback(() => {
-    setWhoopTokens(loadWhoopTokens());
-    setWhoopProfile(loadWhoopProfile());
-    setWhoopRecovery(loadWhoopRecovery());
-    setWhoopSleep(loadWhoopSleep());
-    setWhoopCycles(loadWhoopCycles());
-    setWhoopWorkouts(loadWhoopWorkouts());
-    setWhoopLastSync(loadWhoopLastSync());
-  }, []);
-  const runWhoopSync = useCallback(async ({ backfillDays = 2 } = {}) => {
-    if (whoopSyncing) return;
-    setWhoopSyncing(true); setWhoopSyncError("");
-    try {
-      await syncWhoop({ backfillDays });
-      refreshWhoopState();
-    } catch (err) {
-      const msg = err?.message || String(err);
-      if (msg === "reconnect_required") setWhoopSyncError("Reconnect Whoop");
-      else if (msg === "not_connected") setWhoopSyncError("Not connected");
-      else if (err?.rateLimited) setWhoopSyncError("Rate limited — try again soon");
-      else setWhoopSyncError("Sync failed");
-    } finally {
-      setWhoopSyncing(false);
-    }
-  }, [whoopSyncing, refreshWhoopState]);
-  // Auto-sync on app open if tokens exist and last sync > 6h ago.
-  useEffect(() => {
-    if (autoSyncedRef.current) return;
-    if (!whoopTokens?.access_token) return;
-    const last = whoopLastSync ? Date.parse(whoopLastSync) : 0;
-    if (Date.now() - last > WHOOP_SYNC_INTERVAL_MS) {
-      autoSyncedRef.current = true;
-      runWhoopSync({ backfillDays: 2 });
-    } else {
-      autoSyncedRef.current = true;
-    }
-  }, [whoopTokens, whoopLastSync, runWhoopSync]);
-  // Pick up newly stored tokens after OAuth completes.
-  useEffect(() => {
-    if (oauthResult?.phase === "success") {
-      refreshWhoopState();
-    }
-  }, [oauthResult, refreshWhoopState]);
-  const disconnectWhoop = useCallback(() => {
-    if (!confirm("Disconnect Whoop? Your cached data stays; you'll re-authorize to sync again.")) return;
-    saveWhoopTokens(null);
-    refreshWhoopState();
-  }, [refreshWhoopState]);
-  const beginWhoopOAuth = useCallback(() => {
-    const id = loadWhoopClientId();
-    if (!id) { alert("Paste your Whoop Client ID in Settings → Integrations first."); return; }
-    const state = randomState(24);
-    sessionStorage.setItem(WHOOP_OAUTH_STATE_KEY, state);
-    const qs = new URLSearchParams({
-      response_type: "code",
-      client_id: id,
-      redirect_uri: whoopRedirectUri(),
-      scope: WHOOP_SCOPES,
-      state,
-    });
-    window.location.href = WHOOP_AUTH_URL + "?" + qs.toString();
-  }, []);
 
   const todayKey = today();
   const entries = history[selectedDate] || [];
@@ -2136,23 +1466,6 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
           e(Ring, { value: totals.fat, max: goals.fat, color: t.fat, label: "Fat", unit: "g", mode: "limit" })
         ),
 
-        // ── Whoop Recovery card ───────────────────────────────────
-        e(RecoveryCard, {
-          date: selectedDate,
-          isToday,
-          connected: whoopConnected,
-          syncing: whoopSyncing,
-          syncError: whoopSyncError,
-          lastSync: whoopLastSync,
-          recovery: whoopRecovery[selectedDate] || null,
-          sleep: whoopSleep[selectedDate] || null,
-          cycle: whoopCycles[selectedDate] || null,
-          onSync: () => runWhoopSync({ backfillDays: 2 }),
-          onConnect: () => setShowSettings(true),
-          onReconnect: () => { saveWhoopTokens(null); refreshWhoopState(); setShowSettings(true); },
-        }),
-        (whoopWorkouts[selectedDate] && whoopWorkouts[selectedDate].length > 0) && e(WorkoutsCard, { workouts: whoopWorkouts[selectedDate] }),
-
         // ── Primary input: Speak / Type / Scan tiles ──────────────
         e("div", { style: { display: "flex", gap: 10, marginBottom: 8 } },
           // Speak tile
@@ -2381,56 +1694,12 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode, oauthResult
       onClose: () => setShowSettings(false),
       onSave: (g) => { setGoals(g); setShowSettings(false); },
       onClearKey,
-      whoopConnected, whoopProfile,
-      whoopClientId, setWhoopClientId,
-      onConnectWhoop: beginWhoopOAuth,
-      onDisconnectWhoop: disconnectWhoop,
-      onRebackfillWhoop: () => runWhoopSync({ backfillDays: 60 }),
-      whoopSyncing,
     }),
     showFavs && e(FavoritesPanel, { favs, onClose: () => setShowFavs(false), onLog: logFavorite, onRemove: removeFavorite }),
     showHistory && e(HistoryPanel, { history, goals, todayKey, onClose: () => setShowHistory(false) }),
-    showTrends && e(TrendsPanel, { history, body, goals, bodyTargets, apiKey, onClose: () => setShowTrends(false), onSaveBody: saveBodyEntry, whoopRecovery, whoopSleep, whoopCycles, whoopConnected }),
+    showTrends && e(TrendsPanel, { history, body, goals, bodyTargets, apiKey, onClose: () => setShowTrends(false), onSaveBody: saveBodyEntry }),
     showScanner && e(BarcodeScanner, { onDetect: handleBarcodeDetected, onClose: () => setShowScanner(false) }),
-    barcodeState && e(BarcodeConfirm, { state: barcodeState, onLog: logBarcode, onCancel: () => setBarcodeState(null), onRetry: () => { setBarcodeState(null); setShowScanner(true); } }),
-    oauthResult && oauthResult.phase === "error" && e(WhoopOAuthErrorDialog, { message: oauthResult.message, onClose: clearOauthResult, onRetry: () => { clearOauthResult(); setShowSettings(true); } }),
-    showBackfillPrompt && e(BackfillPrompt, {
-      onAccept: async () => { closeBackfillPrompt(); await runWhoopSync({ backfillDays: 60 }); },
-      onSkip: async () => { closeBackfillPrompt(); await runWhoopSync({ backfillDays: 2 }); }
-    })
-  );
-}
-
-function BackfillPrompt({ onAccept, onSkip }) {
-  const t = useTheme();
-  return e("div", { style: { position: "fixed", inset: 0, zIndex: 210, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
-    e("div", { onClick: onSkip, style: { position: "absolute", inset: 0, background: t.overlay, backdropFilter: "blur(10px)" } }),
-    e("div", { className: "sheet-anim", style: { position: "relative", width: "100%", maxWidth: 440, background: t.sheet, borderRadius: "24px 24px 0 0", padding: "22px 24px calc(34px + 16px)", border: "1px solid "+t.sheetBorder, borderBottom: "none" } },
-      e("div", { style: { width: 40, height: 4, borderRadius: 2, background: t.border, margin: "0 auto 18px" } }),
-      e("div", { style: { fontSize: 10, color: t.textMuted, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 600, fontFamily: "'DM Sans', sans-serif", marginBottom: 8 } }, "Whoop connected"),
-      e("h2", { style: { margin: 0, fontSize: 24, fontFamily: "'Playfair Display', serif", fontWeight: 700, color: t.text, lineHeight: 1.25, marginBottom: 8 } }, "Load the last 60 days?"),
-      e("p", { style: { fontSize: 13, color: t.textDim, lineHeight: 1.6, fontFamily: "'DM Sans', sans-serif", marginBottom: 18 } }, "We'll pull recovery, sleep, strain, and workouts back to 60 days ago so your trends fill in immediately. Otherwise we'll just sync the last couple of days."),
-      e("div", { style: { display: "flex", gap: 10 } },
-        e("button", { onClick: onSkip, className: "tap", style: { flex: 1, padding: "13px 14px", background: "none", border: "1px solid "+t.border, borderRadius: 12, color: t.textDim, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, "Just the last 2 days"),
-        e("button", { onClick: onAccept, className: "tap", style: { flex: 1.3, padding: "13px 14px", background: t.accent, border: "none", borderRadius: 12, color: t.onAccent, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3, boxShadow: "0 4px 14px "+t.shadow } }, "Load 60 days")
-      )
-    )
-  );
-}
-
-function WhoopOAuthErrorDialog({ message, onClose, onRetry }) {
-  const t = useTheme();
-  return e("div", { style: { position: "fixed", inset: 0, zIndex: 210, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
-    e("div", { onClick: onClose, style: { position: "absolute", inset: 0, background: t.overlay, backdropFilter: "blur(10px)" } }),
-    e("div", { className: "sheet-anim", style: { position: "relative", width: "100%", maxWidth: 440, background: t.sheet, borderRadius: "24px 24px 0 0", padding: "22px 24px calc(34px + 16px)", border: "1px solid "+t.sheetBorder, borderBottom: "none" } },
-      e("div", { style: { width: 40, height: 4, borderRadius: 2, background: t.border, margin: "0 auto 18px" } }),
-      e("div", { style: { fontSize: 10, color: t.danger, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 600, fontFamily: "'DM Sans', sans-serif", marginBottom: 8 } }, "Whoop connection failed"),
-      e("p", { style: { fontSize: 13, color: t.textDim, lineHeight: 1.6, fontFamily: "'DM Sans', sans-serif", marginBottom: 18 } }, message || "Something went wrong during authorization."),
-      e("div", { style: { display: "flex", gap: 10 } },
-        e("button", { onClick: onClose, className: "tap", style: { flex: 1, padding: "13px 14px", background: "none", border: "1px solid "+t.border, borderRadius: 12, color: t.textDim, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3 } }, "Close"),
-        e("button", { onClick: onRetry, className: "tap", style: { flex: 1, padding: "13px 14px", background: t.accent, border: "none", borderRadius: 12, color: t.onAccent, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", letterSpacing: 0.3, boxShadow: "0 4px 14px "+t.shadow } }, "Open Settings")
-      )
-    )
+    barcodeState && e(BarcodeConfirm, { state: barcodeState, onLog: logBarcode, onCancel: () => setBarcodeState(null), onRetry: () => { setBarcodeState(null); setShowScanner(true); } })
   );
 }
 
@@ -2438,8 +1707,6 @@ function WhoopOAuthErrorDialog({ message, onClose, onRetry }) {
 function App() {
   const { theme, mode, setMode } = useThemeMode();
   const [apiKey, setApiKey] = useState(() => loadApiKey());
-  const [oauthResult, setOauthResult] = useState(null); // { phase: "exchanging"|"success"|"error", message? }
-  const [showBackfillPrompt, setShowBackfillPrompt] = useState(false);
   useEffect(() => {
     document.body.style.background = theme.bg;
     document.body.style.color = theme.text;
@@ -2448,47 +1715,6 @@ function App() {
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) metaTheme.setAttribute("content", theme.bg);
   }, [theme]);
-  // Handle Whoop OAuth callback on app load.
-  useEffect(() => {
-    if (!window.location.pathname.startsWith("/whoop-callback")) return;
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    const state = params.get("state");
-    const errorParam = params.get("error");
-    const storedState = sessionStorage.getItem(WHOOP_OAUTH_STATE_KEY);
-    // Always strip the URL so reloads don't re-trigger.
-    const cleanUrl = window.location.origin + "/";
-    if (errorParam) {
-      setOauthResult({ phase: "error", message: "Whoop returned: " + errorParam });
-      window.history.replaceState({}, "", cleanUrl);
-      return;
-    }
-    if (!code) {
-      window.history.replaceState({}, "", cleanUrl);
-      return;
-    }
-    if (!state || !storedState || state !== storedState) {
-      setOauthResult({ phase: "error", message: "State mismatch — possible CSRF. Try connecting again." });
-      sessionStorage.removeItem(WHOOP_OAUTH_STATE_KEY);
-      window.history.replaceState({}, "", cleanUrl);
-      return;
-    }
-    sessionStorage.removeItem(WHOOP_OAUTH_STATE_KEY);
-    setOauthResult({ phase: "exchanging" });
-    (async () => {
-      try {
-        const raw = await whoopTokenExchange(code, whoopRedirectUri());
-        const tokens = normalizeTokenResponse(raw);
-        saveWhoopTokens(tokens);
-        window.history.replaceState({}, "", cleanUrl);
-        setOauthResult({ phase: "success" });
-        setShowBackfillPrompt(true);
-      } catch (err) {
-        window.history.replaceState({}, "", cleanUrl);
-        setOauthResult({ phase: "error", message: err?.message || "Token exchange failed" });
-      }
-    })();
-  }, []);
   return e(ThemeContext.Provider, { value: theme },
     !apiKey
       ? e(SetupScreen, { onSave: setApiKey })
@@ -2497,10 +1723,6 @@ function App() {
           onClearKey: () => { localStorage.removeItem(API_KEY_KEY); setApiKey(""); },
           themeMode: mode,
           setThemeMode: setMode,
-          oauthResult,
-          clearOauthResult: () => setOauthResult(null),
-          showBackfillPrompt,
-          closeBackfillPrompt: () => setShowBackfillPrompt(false),
         })
   );
 }
