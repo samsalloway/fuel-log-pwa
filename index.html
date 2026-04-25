@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-title" content="Health Log">
 <meta name="theme-color" content="#FAF7F2">
 <title>Health Log</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23FAF7F2'/><text y='.9em' font-size='90' x='5'>🔥</text></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%23F5EADB'/><path d='M18 50 Q 28 38 32 30 T 46 14' fill='none' stroke='%2388A68A' stroke-width='2.4' stroke-linecap='round'/><ellipse cx='24' cy='42' rx='6' ry='2.6' fill='%2388A68A' transform='rotate(35 24 42)'/><ellipse cx='32' cy='30' rx='6.5' ry='2.6' fill='%2388A68A' transform='rotate(-45 32 30)'/><ellipse cx='40' cy='22' rx='6' ry='2.6' fill='%2388A68A' transform='rotate(35 40 22)'/></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><defs><linearGradient id='bg' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23D08760'/><stop offset='1' stop-color='%23B86A47'/></linearGradient></defs><rect width='180' height='180' fill='url(%23bg)'/><path d='M50 138 Q 78 110 92 88 T 132 36' fill='none' stroke='%23F5EADB' stroke-width='5' stroke-linecap='round' opacity='0.95'/><ellipse cx='66' cy='118' rx='15' ry='6.5' fill='%23F5EADB' transform='rotate(35 66 118)' opacity='0.95'/><ellipse cx='92' cy='88' rx='17' ry='6.5' fill='%23F5EADB' transform='rotate(-45 92 88)' opacity='0.95'/><ellipse cx='118' cy='58' rx='15' ry='6.5' fill='%23F5EADB' transform='rotate(35 118 58)' opacity='0.95'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;700;900&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
@@ -331,7 +331,14 @@ function SetupScreen({ onSave }) {
   return e("div", { style: { height: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 28px", background: t.bgGradient, color: t.text } },
     e("div", { style: { maxWidth: 380, width: "100%", animation: "fadeIn 0.5s ease" } },
       e("div", { style: { textAlign: "center", marginBottom: 36 } },
-        e("div", { style: { fontSize: 44, marginBottom: 14 } }, "🔥"),
+        e("div", { style: { width: 72, height: 72, margin: "0 auto 16px", borderRadius: "50%", background: "linear-gradient(155deg, "+t.surfaceElevated+", "+t.surface+")", border: "1px solid "+t.border, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 22px "+t.shadow } },
+          e("svg", { width: 40, height: 40, viewBox: "0 0 64 64", "aria-hidden": true },
+            e("path", { d: "M18 50 Q 28 38 32 30 T 46 14", fill: "none", stroke: t.pro, strokeWidth: 2.6, strokeLinecap: "round" }),
+            e("ellipse", { cx: 24, cy: 42, rx: 6, ry: 2.6, fill: t.pro, transform: "rotate(35 24 42)" }),
+            e("ellipse", { cx: 32, cy: 30, rx: 6.5, ry: 2.6, fill: t.pro, transform: "rotate(-45 32 30)" }),
+            e("ellipse", { cx: 40, cy: 22, rx: 6, ry: 2.6, fill: t.pro, transform: "rotate(35 40 22)" })
+          )
+        ),
         e("h1", { style: { fontFamily: "'Playfair Display', serif", fontSize: 36, fontWeight: 700, margin: "0 0 8px", letterSpacing: -0.5, color: t.text } }, "Health Log"),
         e("p", { style: { color: t.textMuted, fontSize: 13, letterSpacing: 0.2 } }, "A calmer way to track what you eat.")
       ),
@@ -1484,7 +1491,15 @@ function MacroTracker({ apiKey, onClearKey, themeMode, setThemeMode }) {
         // ── Title row: wordmark + toolbar ─────────────────────────
         e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
           e("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } },
-            e("h1", { style: { fontFamily: "'Playfair Display', serif", fontSize: 30, fontWeight: 700, margin: 0, letterSpacing: -0.6, color: t.text, lineHeight: 1 } }, "Health Log"),
+            e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+              e("svg", { width: 22, height: 22, viewBox: "0 0 64 64", "aria-hidden": true, style: { flexShrink: 0, transform: "translateY(2px)" } },
+                e("path", { d: "M18 50 Q 28 38 32 30 T 46 14", fill: "none", stroke: t.pro, strokeWidth: 2.6, strokeLinecap: "round" }),
+                e("ellipse", { cx: 24, cy: 42, rx: 6, ry: 2.6, fill: t.pro, transform: "rotate(35 24 42)" }),
+                e("ellipse", { cx: 32, cy: 30, rx: 6.5, ry: 2.6, fill: t.pro, transform: "rotate(-45 32 30)" }),
+                e("ellipse", { cx: 40, cy: 22, rx: 6, ry: 2.6, fill: t.pro, transform: "rotate(35 40 22)" })
+              ),
+              e("h1", { style: { fontFamily: "'Playfair Display', serif", fontSize: 30, fontWeight: 700, margin: 0, letterSpacing: -0.6, color: t.text, lineHeight: 1 } }, "Health Log")
+            ),
             e("span", { style: { fontFamily: "'Playfair Display', serif", fontStyle: "italic", fontSize: 12, color: t.textMuted, fontWeight: 400, letterSpacing: 0.2 } },
               isToday ? "today" : new Date(selectedDate+"T00:00:00").toLocaleDateString("en-US", { weekday: "long" }).toLowerCase()
             )
